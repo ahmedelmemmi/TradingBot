@@ -13,6 +13,12 @@ public class RsiCalculator {
 
     public BigDecimal calculate(List<Candle> candles) {
 
+        for (Candle candle : candles) {
+            if (candle.getClose() == null) {
+                throw new IllegalStateException("Candle close is null");
+            }
+        }
+
         if (candles.size() <= PERIOD) {
             throw new IllegalArgumentException("Not enough candles to calculate RSI");
         }

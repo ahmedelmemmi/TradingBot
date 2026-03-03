@@ -56,4 +56,23 @@ public class PositionManager {
     public List<Position> getClosedPositions() {
         return closedPositions;
     }
+
+    public void closePosition(String symbol, BigDecimal exitPrice) {
+
+        Optional<Position> optionalPosition = getOpenPosition(symbol);
+
+        if (optionalPosition.isEmpty()) {
+            System.out.println("No open position found to close for: " + symbol);
+            return;
+        }
+
+        Position position = optionalPosition.get();
+
+        position.close(exitPrice);
+
+        openPositions.remove(position);
+        closedPositions.add(position);
+
+        System.out.println("Position closed and moved to history: " + symbol);
+    }
 }
