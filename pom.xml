@@ -53,6 +53,7 @@
 		<dependency>
 			<groupId>com.ib.client</groupId>
 			<artifactId>ibapi</artifactId>
+			<version>10.37.02</version>
 		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
