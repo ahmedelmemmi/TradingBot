@@ -1,9 +1,9 @@
 package com.tradingbot.trading.Bot.backtest;
 
 import com.tradingbot.trading.Bot.domain.Candle;
+import com.tradingbot.trading.Bot.domain.Position;
 import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
-import com.tradingbot.trading.Bot.position.Position;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.strategy.Strategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
@@ -41,7 +41,7 @@ public class BacktestEngine {
             BigDecimal currentPrice =
                     candles.get(i).getClose();
 
-            positionManager.updatePrice(symbol, currentPrice);
+//            positionManager.updatePrice(symbol, currentPrice);
         }
 
         int totalTrades = positionManager.getClosedPositions().size();
@@ -131,7 +131,7 @@ public class BacktestEngine {
                 BigDecimal quantity = new BigDecimal(10); // simple fixed size for backtest
 
                 positionManager.openPosition(
-                        new com.tradingbot.trading.Bot.position.Position(
+                        new com.tradingbot.trading.Bot.domain.Position(
                                 symbol,
                                 currentPrice,
                                 quantity,
@@ -148,7 +148,7 @@ public class BacktestEngine {
         int losingTrades = 0;
         BigDecimal totalPnL = BigDecimal.ZERO;
 
-        for (com.tradingbot.trading.Bot.position.Position position : positionManager.getClosedPositions()) {
+        for (com.tradingbot.trading.Bot.domain.Position position : positionManager.getClosedPositions()) {
             BigDecimal pnl = position.getPnl();
             totalPnL = totalPnL.add(pnl);
             if (pnl.compareTo(BigDecimal.ZERO) > 0) winningTrades++;

@@ -5,43 +5,83 @@ import com.tradingbot.trading.Bot.portfolio.PortfolioService;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
 
 @Service
 public class RiskEngine {
-    private static final BigDecimal MAX_RISK_PER_TRADE_PERCENT = BigDecimal.valueOf(0.01); // 1%
-    private static final BigDecimal MAX_DAILY_LOSS_PERCENT = BigDecimal.valueOf(0.03); // 3%
+    private static final BigDecimal DAILY_LOSS_LIMIT_PERCENT =
+            BigDecimal.valueOf(0.02); // 2%
 
-    private final PortfolioService portfolioService;
-    private final BrokerStateService brokerStateService;
+    private BigDecimal startingBalance = BigDecimal.ZERO;
+    private BigDecimal realizedPnL = BigDecimal.ZERO;
 
-    public RiskEngine(PortfolioService portfolioService, BrokerStateService brokerStateService) {
-        this.portfolioService = portfolioService;
-        this.brokerStateService = brokerStateService;
+    private LocalDate currentTradingDay = LocalDate.now();
+
+    public synchronized boolean canTrade() {
+
+        resetIfNewDay();
+
+        BigDecimal maxLoss =
+                startingBalance.multiply(DAILY_LOSS_LIMIT_PERCENT);
+
+        if (realizedPnL.abs().compareTo(maxLoss) >= 0 &&
+                realizedPnL.signum() < 0) {
+
+            System.out.println("⚠ DAILY LOSS LIMIT REACHED.");
+            System.out.println("Trading disabled for today.");
+
+            return false;
+        }
+
+        return true;
     }
 
-    public boolean canTrade() {
+    public synchronized void setStartingBalance(BigDecimal balance) {
 
-        BigDecimal maxDailyLoss = portfolioService.getBalance()
-                .multiply(MAX_DAILY_LOSS_PERCENT);
-
-        return portfolioService.getDailyLoss()
-                .compareTo(maxDailyLoss) < 0;
+        if (startingBalance.compareTo(BigDecimal.ZERO) == 0) {
+            startingBalance = balance;
+            System.out.println("Starting balance set: " + startingBalance);
+        }
     }
 
-    public BigDecimal calculatePositionSize(BigDecimal entryPrice, BigDecimal stopLossPrice) {
+    public synchronized void recordTradePnL(BigDecimal pnl) {
 
-        BigDecimal riskAmount = portfolioService.getBalance()
-                .multiply(MAX_RISK_PER_TRADE_PERCENT);
+        realizedPnL = realizedPnL.add(pnl);
 
-        BigDecimal riskPerShare = entryPrice.subtract(stopLossPrice).abs();
+        System.out.println("Trade PnL recorded: " + pnl);
+        System.out.println("Daily PnL: " + realizedPnL);
+    }
 
-        if (riskPerShare.compareTo(BigDecimal.ZERO) == 0) {
+    private void resetIfNewDay() {
+
+        LocalDate today = LocalDate.now();
+
+        if (!today.equals(currentTradingDay)) {
+
+            currentTradingDay = today;
+            realizedPnL = BigDecimal.ZERO;
+
+            System.out.println("New trading day. PnL reset.");
+        }
+    }
+
+    public BigDecimal calculatePositionSize(BigDecimal entryPrice,
+                                            BigDecimal stopLoss) {
+
+        BigDecimal riskPerShare =
+                entryPrice.subtract(stopLoss).abs();
+
+        if (riskPerShare.compareTo(BigDecimal.ZERO) <= 0) {
             return BigDecimal.ZERO;
         }
-        System.out.println("Entry price: " + entryPrice);
-        System.out.println("Stop loss: " + stopLossPrice);
-        System.out.println("Risk per share: " + entryPrice.subtract(stopLossPrice));
-        System.out.println("Account cash: " + brokerStateService.getCashBalance());
-        return riskAmount.divide(riskPerShare, 0, BigDecimal.ROUND_DOWN);
+
+        BigDecimal accountRisk =
+                startingBalance.multiply(BigDecimal.valueOf(0.01));
+
+        BigDecimal shares =
+                accountRisk.divide(riskPerShare, 0, RoundingMode.DOWN);
+
+        return shares;
     }
 }
