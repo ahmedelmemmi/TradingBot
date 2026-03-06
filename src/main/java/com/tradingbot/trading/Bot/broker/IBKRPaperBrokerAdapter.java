@@ -6,7 +6,9 @@ import com.tradingbot.trading.Bot.domain.Position;
 import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
 import com.tradingbot.trading.Bot.market.LiveCandleBuffer;
+import com.tradingbot.trading.Bot.market.MarketHoursService;
 import com.tradingbot.trading.Bot.position.PositionManager;
+import com.tradingbot.trading.Bot.risk.RiskEngine;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Service;
 
@@ -32,6 +34,8 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
     private final BrokerStateService brokerStateService;
     private final PositionManager positionManager;
     private final TradeDecisionService tradeDecisionService;
+    private final RiskEngine riskEngine;
+    private final MarketHoursService marketHoursService;
 
     private final Map<Integer, TradeDecision> pendingOrders = new ConcurrentHashMap<>();
 
@@ -52,11 +56,13 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
     public IBKRPaperBrokerAdapter(
             BrokerStateService brokerStateService,
             PositionManager positionManager,
-            TradeDecisionService tradeDecisionService) {
+            TradeDecisionService tradeDecisionService, RiskEngine riskEngine, MarketHoursService marketHoursService) {
 
         this.brokerStateService = brokerStateService;
         this.positionManager = positionManager;
         this.tradeDecisionService = tradeDecisionService;
+        this.riskEngine = riskEngine;
+        this.marketHoursService = marketHoursService;
 
         for (String symbol : symbols) {
             buffers.put(symbol, new LiveCandleBuffer());
@@ -170,8 +176,9 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
     @Override
     public void historicalData(int reqId, Bar bar) {
         String symbol = requestToSymbol.get(reqId);
-        System.out.println("🔹 Bar received for " + symbol + " - Close: " + bar.close() + " Volume: " + bar.volume());
-
+        if (currentBatches.get(symbol).size() == 1) {
+            System.out.println("Receiving bars for " + symbol);
+        }
         if (symbol == null) {
             System.out.println("⚠️ Symbol not found for reqId: " + reqId);
             return;
@@ -202,6 +209,21 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
 
     @Override
     public void historicalDataEnd(int reqId, String start, String end) {
+        if (!marketHoursService.isMarketOpen()) {
+
+            System.out.println("Market closed. Sleeping before next check...");
+
+            new Thread(() -> {
+                try {
+                    Thread.sleep(60000); // wait 1 minute
+                    requestHistoricalBars();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+
+            return;
+        }
         String symbol = requestToSymbol.get(reqId);
 
         if (symbol == null) return;
@@ -244,7 +266,7 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
             // Add a delay before requesting again (e.g., 5 seconds)
             new Thread(() -> {
                 try {
-                    Thread.sleep(5000); // Wait 5 seconds
+                    Thread.sleep(60000); // Wait 5 seconds
                     requestHistoricalBars();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -389,6 +411,7 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
 
         if ("NetLiquidation".equals(tag)) {
             brokerStateService.updateNetLiquidation(value);
+            riskEngine.setStartingBalance(new BigDecimal(value));
         }
     }
 

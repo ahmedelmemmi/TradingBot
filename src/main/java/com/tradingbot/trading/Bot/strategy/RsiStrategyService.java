@@ -5,42 +5,57 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 
 @Service
 public class RsiStrategyService {
-    private final RsiCalculator rsiCalculator;
-    private BigDecimal lastRsi = BigDecimal.ZERO;
+    private final RsiCalculator rsiCalculator = new RsiCalculator();
 
     public RsiStrategyService(RsiCalculator rsiCalculator) {
-        this.rsiCalculator = rsiCalculator;
     }
 
     public TradingSignal evaluate(List<Candle> candles) {
+
         System.out.println("RSI evaluate called. Candle size: " + candles.size());
-        if (candles.size() < 15) {
-            System.out.println("Not enough candles for RSI: " + candles.size());
+
+        if (candles.size() < 50) {
             return TradingSignal.HOLD;
         }
 
-        List<Candle> lastCandles =
-                candles.subList(candles.size() - 15, candles.size());
-
-        BigDecimal rsi = rsiCalculator.calculate(lastCandles);
-
-        lastRsi = rsi;
+        BigDecimal rsi = rsiCalculator.calculate(candles);
 
         System.out.println("Computed RSI value: " + rsi);
-        if (rsi.compareTo(BigDecimal.valueOf(30)) < 0) {
-            System.out.println("Returning signal: " + TradingSignal.BUY);
+
+        BigDecimal movingAverage = calculateMA(candles, 50);
+
+        BigDecimal lastPrice = candles.get(candles.size() - 1).getClose();
+
+        System.out.println("MA50: " + movingAverage);
+        System.out.println("Last Price: " + lastPrice);
+
+        // BUY condition
+        if (rsi.compareTo(BigDecimal.valueOf(30)) < 0 &&
+                lastPrice.compareTo(movingAverage) > 0) {
+
+            System.out.println("Returning signal: BUY");
             return TradingSignal.BUY;
         }
 
-        if (rsi.compareTo(BigDecimal.valueOf(70)) > 0) {
-            System.out.println("Returning signal: " + TradingSignal.SELL);
-            return TradingSignal.SELL;
-        }
-        System.out.println("Returning signal: " + TradingSignal.HOLD);
+        System.out.println("Returning signal: HOLD");
         return TradingSignal.HOLD;
+    }
+
+    private BigDecimal calculateMA(List<Candle> candles, int period) {
+
+        BigDecimal sum = BigDecimal.ZERO;
+
+        int start = candles.size() - period;
+
+        for (int i = start; i < candles.size(); i++) {
+            sum = sum.add(candles.get(i).getClose());
+        }
+
+        return sum.divide(BigDecimal.valueOf(period), 4, RoundingMode.HALF_UP);
     }
 }
