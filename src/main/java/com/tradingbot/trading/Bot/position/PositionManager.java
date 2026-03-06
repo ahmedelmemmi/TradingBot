@@ -1,5 +1,6 @@
 package com.tradingbot.trading.Bot.position;
 
+import com.tradingbot.trading.Bot.persistence.TradeService;
 import lombok.Getter;
 import org.springframework.stereotype.Service;
 import com.tradingbot.trading.Bot.domain.Position;
@@ -13,10 +14,20 @@ import java.util.Optional;
 public class PositionManager {
     private final List<Position> openPositions = new ArrayList<>();
     private final List<Position> closedPositions = new ArrayList<>();
+    private final TradeService tradeService;
+
+    public PositionManager(TradeService tradeService) {
+        this.tradeService = tradeService;
+    }
 
     public void openPosition(Position position) {
 
         openPositions.add(position);
+        tradeService.recordEntry(
+                position.getSymbol(),
+                position.getEntryPrice(),
+                position.getQuantity()
+        );
 
         System.out.println("Position registered: " + position.getSymbol());
     }
@@ -76,6 +87,11 @@ public class PositionManager {
         openPositions.remove(position);
 
         closedPositions.add(position);
+        tradeService.recordExit(
+                symbol,
+                exitPrice,
+                position.getPnl()
+        );
 
         System.out.println("Position closed and moved to history: " + symbol);
     }
