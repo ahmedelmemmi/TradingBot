@@ -10,16 +10,18 @@ import java.util.List;
 
 @Service
 public class RsiStrategyService {
-    private final RsiCalculator rsiCalculator = new RsiCalculator();
+    private final RsiCalculator rsiCalculator;
 
     public RsiStrategyService(RsiCalculator rsiCalculator) {
+        this.rsiCalculator = rsiCalculator;
     }
 
     public TradingSignal evaluate(List<Candle> candles) {
 
         System.out.println("RSI evaluate called. Candle size: " + candles.size());
 
-        if (candles.size() < 50) {
+        if (candles.size() < 20) {
+            System.out.println("Not enough candles yet.");
             return TradingSignal.HOLD;
         }
 
@@ -27,15 +29,14 @@ public class RsiStrategyService {
 
         System.out.println("Computed RSI value: " + rsi);
 
-        BigDecimal movingAverage = calculateMA(candles, 50);
+        BigDecimal movingAverage = calculateMA(candles, 20);
 
         BigDecimal lastPrice = candles.get(candles.size() - 1).getClose();
 
-        System.out.println("MA50: " + movingAverage);
+        System.out.println("MA20: " + movingAverage);
         System.out.println("Last Price: " + lastPrice);
 
-        // BUY condition
-        if (rsi.compareTo(BigDecimal.valueOf(30)) < 0 &&
+        if (rsi.compareTo(BigDecimal.valueOf(40)) < 0 &&
                 lastPrice.compareTo(movingAverage) > 0) {
 
             System.out.println("Returning signal: BUY");
@@ -43,6 +44,7 @@ public class RsiStrategyService {
         }
 
         System.out.println("Returning signal: HOLD");
+
         return TradingSignal.HOLD;
     }
 

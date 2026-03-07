@@ -405,14 +405,30 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
                                String value,
                                String currency) {
 
-        if ("CashBalance".equals(tag)) {
-            brokerStateService.updateCash(value);
-        }
+        try {
 
-        if ("NetLiquidation".equals(tag)) {
-            brokerStateService.updateNetLiquidation(value);
-            riskEngine.setStartingBalance(new BigDecimal(value));
-        }
+            BigDecimal balance = new BigDecimal(value);
+
+            if ("CashBalance".equals(tag)) {
+
+                brokerStateService.updateCash(value);
+
+                if (riskEngine != null) {
+                    riskEngine.setStartingBalance(balance);
+                }
+            }
+
+            if ("NetLiquidation".equals(tag)) {
+
+                brokerStateService.updateNetLiquidation(value);
+
+                if (riskEngine != null) {
+                    riskEngine.setStartingBalance(balance);
+                }
+            }
+
+        } catch (Exception ignored) {}
+
     }
 
     @Override
