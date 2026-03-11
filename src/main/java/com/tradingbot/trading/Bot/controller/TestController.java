@@ -4,6 +4,7 @@ import com.tradingbot.trading.Bot.backtest.BacktestEngine;
 import com.tradingbot.trading.Bot.backtest.BacktestResult;
 import com.tradingbot.trading.Bot.broker.BrokerStateService;
 import com.tradingbot.trading.Bot.broker.IBKRPaperBrokerAdapter;
+import com.tradingbot.trading.Bot.domain.Candle;
 import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
@@ -13,35 +14,47 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
-import java.util.Map;
+import java.util.*;
 
 @RestController
 public class TestController {
+
     private final MockMarketDataService marketDataService;
     private final RsiStrategyService rsiStrategyService;
     private final TradeDecisionService tradeDecisionService;
     private final PositionManager positionManager;
     private final BacktestEngine backtestEngine;
-    private final IBKRPaperBrokerAdapter ibkrPaperBrokerAdapter;
+    private final IBKRPaperBrokerAdapter brokerAdapter;
     private final BrokerStateService brokerStateService;
 
     public TestController(MockMarketDataService marketDataService,
-                          RsiStrategyService rsiStrategyService, TradeDecisionService tradeDecisionService, PositionManager positionManager, BacktestEngine backtestEngine, IBKRPaperBrokerAdapter ibkrPaperBrokerAdapter, BrokerStateService brokerStateService) {
+                          RsiStrategyService rsiStrategyService,
+                          TradeDecisionService tradeDecisionService,
+                          PositionManager positionManager,
+                          BacktestEngine backtestEngine,
+                          IBKRPaperBrokerAdapter brokerAdapter,
+                          BrokerStateService brokerStateService) {
+
         this.marketDataService = marketDataService;
         this.rsiStrategyService = rsiStrategyService;
         this.tradeDecisionService = tradeDecisionService;
         this.positionManager = positionManager;
         this.backtestEngine = backtestEngine;
-        this.ibkrPaperBrokerAdapter = ibkrPaperBrokerAdapter;
+        this.brokerAdapter = brokerAdapter;
         this.brokerStateService = brokerStateService;
     }
 
-
-
+    /*
+     -------------------------------------------------------
+     SIMPLE STRATEGY TEST
+     Simulates one evaluation cycle
+     -------------------------------------------------------
+     */
     @GetMapping("/test")
-    public Object test() {
+    public Object testStrategy() {
 
-        var candles = marketDataService.generateCandles("AAPL", 20);
+        List<Candle> candles =
+                marketDataService.generateCandles("AAPL", 30);
 
         TradeDecision decision =
                 tradeDecisionService.evaluate("AAPL", candles);
@@ -58,14 +71,65 @@ public class TestController {
         );
     }
 
+    /*
+     -------------------------------------------------------
+     SINGLE SYMBOL BACKTEST
+     -------------------------------------------------------
+     */
     @GetMapping("/backtest")
-    public BacktestResult backtest() {
+    public BacktestResult backtestSingleSymbol() {
 
-        var candles = marketDataService.generateCandles("AAPL", 200);
+        List<Candle> candles =
+                marketDataService.generateCandles("AAPL", 500);
 
-        return backtestEngine.run("AAPL", candles);
+        return backtestEngine.runStrategy(
+                "AAPL",
+                candles,
+                rsiStrategyService
+        );
     }
 
+    /*
+     -------------------------------------------------------
+     PORTFOLIO BACKTEST (MULTI SYMBOL)
+     Mirrors real trading bot
+     -------------------------------------------------------
+     */
+    @GetMapping("/backtest-portfolio")
+    public Object backtestPortfolio() {
+
+        List<String> symbols = List.of(
+                "AAPL",
+                "MSFT",
+                "NVDA",
+                "TSLA"
+        );
+
+        Map<String, BacktestResult> results = new HashMap<>();
+
+        for (String symbol : symbols) {
+
+            List<Candle> candles =
+                    marketDataService.generateCandles(symbol, 500);
+
+            BacktestResult result =
+                    backtestEngine.runStrategy(
+                            symbol,
+                            candles,
+                            rsiStrategyService
+                    );
+
+            results.put(symbol, result);
+        }
+
+        return results;
+    }
+
+    /*
+     -------------------------------------------------------
+     LIVE PAPER TRADING TEST
+     -------------------------------------------------------
+     */
     @GetMapping("/test-order")
     public String testOrder() {
 
@@ -77,13 +141,19 @@ public class TestController {
                 BigDecimal.valueOf(190)
         );
 
-        ibkrPaperBrokerAdapter.submitOrder(decision);
+        brokerAdapter.submitOrder(decision);
 
-        return "Order submitted";
+        return "Paper order submitted";
     }
 
+    /*
+     -------------------------------------------------------
+     BROKER STATE
+     -------------------------------------------------------
+     */
     @GetMapping("/broker-state")
     public Object brokerState() {
         return brokerStateService.getPositions();
     }
+
 }
