@@ -18,7 +18,6 @@ import java.util.*;
 
 @RestController
 public class TestController {
-
     private final MockMarketDataService marketDataService;
     private final RsiStrategyService rsiStrategyService;
     private final TradeDecisionService tradeDecisionService;
@@ -47,14 +46,17 @@ public class TestController {
     /*
      -------------------------------------------------------
      SIMPLE STRATEGY TEST
-     Simulates one evaluation cycle
      -------------------------------------------------------
      */
     @GetMapping("/test")
     public Object testStrategy() {
 
         List<Candle> candles =
-                marketDataService.generateCandles("AAPL", 30);
+                marketDataService.generateCandles(
+                        "AAPL",
+                        50,
+                        MockMarketDataService.MarketScenario.SIDEWAYS_VOLATILE
+                );
 
         TradeDecision decision =
                 tradeDecisionService.evaluate("AAPL", candles);
@@ -73,14 +75,18 @@ public class TestController {
 
     /*
      -------------------------------------------------------
-     SINGLE SYMBOL BACKTEST
+     NORMAL BACKTEST
      -------------------------------------------------------
      */
-    @GetMapping("/backtest")
-    public BacktestResult backtestSingleSymbol() {
+    @GetMapping("/backtest/random")
+    public BacktestResult backtestRandom() {
 
         List<Candle> candles =
-                marketDataService.generateCandles("AAPL", 500);
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1000,
+                        MockMarketDataService.MarketScenario.RANDOM
+                );
 
         return backtestEngine.runStrategy(
                 "AAPL",
@@ -91,12 +97,77 @@ public class TestController {
 
     /*
      -------------------------------------------------------
-     PORTFOLIO BACKTEST (MULTI SYMBOL)
-     Mirrors real trading bot
+     UPTREND TEST
      -------------------------------------------------------
      */
-    @GetMapping("/backtest-portfolio")
-    public Object backtestPortfolio() {
+    @GetMapping("/backtest/uptrend")
+    public BacktestResult backtestUptrend() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1000,
+                        MockMarketDataService.MarketScenario.STRONG_UPTREND
+                );
+
+        return backtestEngine.runStrategy(
+                "AAPL",
+                candles,
+                rsiStrategyService
+        );
+    }
+
+    /*
+     -------------------------------------------------------
+     CRASH TEST
+     -------------------------------------------------------
+     */
+    @GetMapping("/backtest/crash")
+    public BacktestResult backtestCrash() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1500,
+                        MockMarketDataService.MarketScenario.CRASH
+                );
+
+        return backtestEngine.runStrategy(
+                "AAPL",
+                candles,
+                rsiStrategyService
+        );
+    }
+
+    /*
+     -------------------------------------------------------
+     VOLATILE SIDEWAYS TEST
+     -------------------------------------------------------
+     */
+    @GetMapping("/backtest/volatile")
+    public BacktestResult backtestVolatile() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1500,
+                        MockMarketDataService.MarketScenario.SIDEWAYS_VOLATILE
+                );
+
+        return backtestEngine.runStrategy(
+                "AAPL",
+                candles,
+                rsiStrategyService
+        );
+    }
+
+    /*
+     -------------------------------------------------------
+     PORTFOLIO BACKTEST
+     -------------------------------------------------------
+     */
+    @GetMapping("/backtest/portfolio")
+    public Map<String, BacktestResult> backtestPortfolio() {
 
         List<String> symbols = List.of(
                 "AAPL",
@@ -110,7 +181,11 @@ public class TestController {
         for (String symbol : symbols) {
 
             List<Candle> candles =
-                    marketDataService.generateCandles(symbol, 500);
+                    marketDataService.generateCandles(
+                            symbol,
+                            1000,
+                            MockMarketDataService.MarketScenario.RANDOM
+                    );
 
             BacktestResult result =
                     backtestEngine.runStrategy(
@@ -127,7 +202,7 @@ public class TestController {
 
     /*
      -------------------------------------------------------
-     LIVE PAPER TRADING TEST
+     PAPER ORDER TEST
      -------------------------------------------------------
      */
     @GetMapping("/test-order")

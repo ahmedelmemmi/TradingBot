@@ -38,6 +38,7 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
     private final MarketHoursService marketHoursService;
 
     private final Map<Integer, TradeDecision> pendingOrders = new ConcurrentHashMap<>();
+    private volatile boolean requestInProgress = false;
 
 //     🔹 Multi symbol support
     private final List<String> symbols = List.of(
@@ -130,7 +131,14 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
         client.reqPositions();
     }
 
-    public void requestHistoricalBars() {
+    public synchronized void requestHistoricalBars() {
+
+        if (requestInProgress) {
+            System.out.println("⚠ Historical request skipped (already running)");
+            return;
+        }
+
+        requestInProgress = true;
 
         client.reqMarketDataType(3);
 
@@ -146,13 +154,14 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
             contract.currency("USD");
             contract.exchange("SMART");
             contract.primaryExch("NASDAQ");
+
             System.out.println("📤 Requesting historical data for " + symbol + " (reqId=" + requestId + ")");
 
             client.reqHistoricalData(
                     requestId,
                     contract,
                     "",
-                    "1800 S",
+                    "10000 S",
                     "1 min",
                     "TRADES",
                     1,
@@ -160,8 +169,6 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
                     false,
                     null
             );
-
-            System.out.println("Historical bars requested for " + symbol + " (reqId=" + requestId + ")");
         }
     }
     @Override
@@ -209,24 +216,21 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
 
     @Override
     public void historicalDataEnd(int reqId, String start, String end) {
+
+        String symbol = requestToSymbol.get(reqId);
+
+        if (symbol == null) return;
+
         if (!marketHoursService.isMarketOpen()) {
 
             System.out.println("Market closed. Sleeping before next check...");
 
-            new Thread(() -> {
-                try {
-                    Thread.sleep(60000); // wait 1 minute
-                    requestHistoricalBars();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }).start();
+            completedRequests.incrementAndGet();
+
+            checkCycleCompletion();
 
             return;
         }
-        String symbol = requestToSymbol.get(reqId);
-
-        if (symbol == null) return;
 
         System.out.println("=== historicalDataEnd triggered for " + symbol + " ===");
 
@@ -241,32 +245,41 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
 
         System.out.println("Candles loaded for " + symbol + ": " + buffer.size());
 
-        if (!buffer.isReady()) {
+        if (buffer.isReady()) {
+
+            checkExitConditions(symbol, buffer);
+
+            TradeDecision decision =
+                    tradeDecisionService.evaluate(symbol, buffer.getCandles());
+
+            if (AUTO_TRADING_ENABLED && decision.isExecute()) {
+                submitOrder(decision);
+            }
+
+        } else {
             System.out.println("Buffer not ready for " + symbol);
-            return;
         }
 
-        checkExitConditions(symbol, buffer);
+        completedRequests.incrementAndGet();
 
-        TradeDecision decision = tradeDecisionService.evaluate(symbol, buffer.getCandles());
+        checkCycleCompletion();
+    }
+    private void checkCycleCompletion() {
 
-        if (AUTO_TRADING_ENABLED && decision.isExecute()) {
-            submitOrder(decision);
-        }
-
-        // Track completed symbols
-        int finished = completedRequests.incrementAndGet();
+        int finished = completedRequests.get();
 
         System.out.println("Completed: " + finished + "/" + symbols.size());
 
         if (finished >= symbols.size()) {
+
             completedRequests.set(0);
+            requestInProgress = false;
+
             System.out.println("=== All symbols processed. Waiting before next cycle ===");
 
-            // Add a delay before requesting again (e.g., 5 seconds)
             new Thread(() -> {
                 try {
-                    Thread.sleep(60000); // Wait 5 seconds
+                    Thread.sleep(60000);
                     requestHistoricalBars();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
