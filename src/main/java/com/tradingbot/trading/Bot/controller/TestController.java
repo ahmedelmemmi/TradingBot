@@ -17,6 +17,7 @@ import com.tradingbot.trading.Bot.market.MockMarketDataService;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.strategy.PerfectBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
+import com.tradingbot.trading.Bot.strategy.SimplifiedBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,6 +31,7 @@ public class TestController {
     private final MockMarketDataService marketDataService;
     private final RsiStrategyService rsiStrategyService;
     private final PerfectBreakoutStrategy perfectBreakoutStrategy;
+    private final SimplifiedBreakoutStrategy simplifiedBreakoutStrategy;
     private final TradeDecisionService tradeDecisionService;
     private final PositionManager positionManager;
     private final BacktestEngine backtestEngine;
@@ -42,6 +44,7 @@ public class TestController {
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
                           PerfectBreakoutStrategy perfectBreakoutStrategy,
+                          SimplifiedBreakoutStrategy simplifiedBreakoutStrategy,
                           TradeDecisionService tradeDecisionService,
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
@@ -51,17 +54,18 @@ public class TestController {
                           PortfolioBacktestEngine portfolioBacktestEngine,
                           BacktestValidationService backtestValidationService) {
 
-        this.marketDataService         = marketDataService;
-        this.rsiStrategyService        = rsiStrategyService;
-        this.perfectBreakoutStrategy   = perfectBreakoutStrategy;
-        this.tradeDecisionService      = tradeDecisionService;
-        this.positionManager           = positionManager;
-        this.backtestEngine            = backtestEngine;
-        this.brokerAdapter             = brokerAdapter;
-        this.brokerStateService        = brokerStateService;
-        this.marketRegimeService       = marketRegimeService;
-        this.portfolioBacktestEngine   = portfolioBacktestEngine;
-        this.backtestValidationService = backtestValidationService;
+        this.marketDataService          = marketDataService;
+        this.rsiStrategyService         = rsiStrategyService;
+        this.perfectBreakoutStrategy    = perfectBreakoutStrategy;
+        this.simplifiedBreakoutStrategy = simplifiedBreakoutStrategy;
+        this.tradeDecisionService       = tradeDecisionService;
+        this.positionManager            = positionManager;
+        this.backtestEngine             = backtestEngine;
+        this.brokerAdapter              = brokerAdapter;
+        this.brokerStateService         = brokerStateService;
+        this.marketRegimeService        = marketRegimeService;
+        this.portfolioBacktestEngine    = portfolioBacktestEngine;
+        this.backtestValidationService  = backtestValidationService;
     }
 
     /*
@@ -503,6 +507,57 @@ public class TestController {
         } else {
             result.put("recommendation", "STRATEGY IS WORKING - Signals generated successfully");
         }
+
+        return result;
+    }
+
+    /*
+    ======================================================
+    ✅ DEBUG: SimplifiedBreakoutStrategy Diagnostic
+    Generates 500 STRONG_UPTREND candles and evaluates the
+    strategy at each bar, counting BUY signals. Use this to
+    verify the strategy generates signals on actual data.
+    Expected: 20-50 signals for 500 candles (4-10%).
+    ======================================================
+     */
+    @GetMapping("/backtest/debug-simplified-breakout")
+    public Map<String, Object> debugSimplifiedBreakout() {
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("DEBUG: SimplifiedBreakoutStrategy Diagnostic");
+        System.out.println("=".repeat(80));
+
+        List<Candle> candles = marketDataService.generateCandles(
+                "AAPL",
+                500,
+                MockMarketDataService.MarketScenario.STRONG_UPTREND
+        );
+
+        System.out.println("Generated 500 STRONG_UPTREND candles. Running strategy evaluation...\n");
+
+        int signalCount = 0;
+        List<String> signals = new ArrayList<>();
+
+        for (int i = 60; i < candles.size(); i++) {
+            List<Candle> subset = candles.subList(0, i + 1);
+            TradingSignal signal = simplifiedBreakoutStrategy.evaluate(subset);
+
+            if (signal == TradingSignal.BUY) {
+                signalCount++;
+                signals.add("Bar " + i);
+            }
+        }
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("RESULT: " + signalCount + " signals found");
+        System.out.println("=".repeat(80) + "\n");
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("totalCandles", candles.size());
+        result.put("signalsFound", signalCount);
+        result.put("signals", signals);
+        result.put("expected", "20-50 signals for 500 candles (4-10%)");
+        result.put("status", signalCount > 10 ? "✅ WORKING" : "❌ NEEDS ADJUSTMENT");
 
         return result;
     }
