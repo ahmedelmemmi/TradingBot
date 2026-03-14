@@ -2,187 +2,288 @@ package com.tradingbot.trading.Bot.backtest;
 
 import com.tradingbot.trading.Bot.domain.Candle;
 import com.tradingbot.trading.Bot.domain.Position;
+import com.tradingbot.trading.Bot.market.MarketRegimeService;
+import com.tradingbot.trading.Bot.market.MarketRegimeService.MarketRegime;
 import com.tradingbot.trading.Bot.position.PositionManager;
+import com.tradingbot.trading.Bot.strategy.AtrCalculator;
 import com.tradingbot.trading.Bot.strategy.Strategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Single-symbol backtesting engine with production-grade realism:
+ *
+ * <ul>
+ *   <li><b>1-bar delayed fills</b>: signal at bar[i] fills at bar[i+1]</li>
+ *   <li><b>Dynamic slippage</b>: via {@link SlippageService} based on ATR and regime</li>
+ *   <li><b>Capital deducted at entry</b>: (price × qty) removed from available capital immediately</li>
+ *   <li><b>Gap risk</b>: SL execution uses fill price, not exact SL level</li>
+ *   <li><b>Trade log</b>: every entry/exit logged as {@link TradeRecord} with CSV export</li>
+ * </ul>
+ */
 @Service
 public class BacktestEngine {
 
     private final PositionManager positionManager;
+    private final SlippageService slippageService;
+    private final MarketRegimeService regimeService;
 
-    private static final BigDecimal STARTING_CAPITAL =
-            BigDecimal.valueOf(10_000);
+    private static final BigDecimal STARTING_CAPITAL = BigDecimal.valueOf(10_000);
+    private static final BigDecimal COMMISSION        = BigDecimal.valueOf(1.0);
+    private static final BigDecimal RISK_PER_TRADE    = BigDecimal.valueOf(0.01); // 1%
 
-    private static final BigDecimal SLIPPAGE =
-            BigDecimal.valueOf(0.0002); // 0.02%
+    private static final AtomicInteger TRADE_COUNTER = new AtomicInteger(0);
 
-    private static final BigDecimal COMMISSION =
-            BigDecimal.valueOf(1.0); // $1 per trade
-
-    public BacktestEngine(PositionManager positionManager) {
+    public BacktestEngine(PositionManager positionManager,
+                          SlippageService slippageService,
+                          MarketRegimeService regimeService) {
         this.positionManager = positionManager;
+        this.slippageService  = slippageService;
+        this.regimeService    = regimeService;
     }
 
+    /**
+     * Runs the strategy against the provided candle list and returns a full
+     * {@link BacktestResult} including trade records and equity curve.
+     *
+     * @param symbol   ticker symbol
+     * @param candles  full historical candle list
+     * @param strategy trading strategy to evaluate
+     * @return backtest result with metrics and trade log
+     */
     public BacktestResult runStrategy(String symbol,
                                       List<Candle> candles,
                                       Strategy strategy) {
 
-        BigDecimal capital = STARTING_CAPITAL;
+        BigDecimal capital   = STARTING_CAPITAL;
+        BigDecimal peakEquity = STARTING_CAPITAL;
+        BigDecimal maxDrawdown = BigDecimal.ZERO;
 
         positionManager.getOpenPositions().clear();
         positionManager.getClosedPositions().clear();
 
-        List<BigDecimal> equityCurve = new ArrayList<>();
+        List<BigDecimal>  equityCurve = new ArrayList<>();
+        List<TradeRecord> tradeLog    = new ArrayList<>();
 
-        BigDecimal peakEquity = capital;
-        BigDecimal maxDrawdown = BigDecimal.ZERO;
+        // pendingSignal: set when BUY is detected at bar[i], fills at bar[i+1]
+        boolean pendingSignal = false;
+        int     entryBar      = -1;
+        int     tradeId       = 0;
+
+        AtrCalculator atrCalc = new AtrCalculator();
 
         for (int i = 20; i < candles.size(); i++) {
 
             List<Candle> subset = candles.subList(0, i + 1);
+            MarketRegime regime = regimeService.detect(subset);
 
-            TradingSignal signal = strategy.evaluate(subset);
+            BigDecimal rawPrice = candles.get(i).getClose();
 
-            BigDecimal marketPrice =
-                    candles.get(i).getClose();
+            // ── 1. Check SL / TP on existing position (realistic gap execution) ──
+            if (positionManager.getOpenPosition(symbol).isPresent()) {
 
-            BigDecimal currentPrice =
-                    marketPrice.multiply(BigDecimal.ONE.add(SLIPPAGE));
+                Position pos = positionManager.getOpenPosition(symbol).get();
+                BigDecimal atr = atrCalc.calculate(subset, 14);
+                BigDecimal slippage = slippageService.calculateSlippage(atr, rawPrice, regime);
 
-            positionManager.updatePrice(symbol, currentPrice);
+                boolean hitSl = rawPrice.compareTo(pos.getStopLoss()) <= 0;
+                boolean hitTp = rawPrice.compareTo(pos.getTakeProfit()) >= 0;
 
-            if (signal == TradingSignal.BUY &&
-                    positionManager.getOpenPosition(symbol).isEmpty()) {
+                if (hitSl || hitTp) {
+                    // Gap risk: execute at current price (may be worse than exact SL)
+                    BigDecimal exitFill = rawPrice.multiply(
+                            BigDecimal.ONE.subtract(slippage));
 
-                BigDecimal stopLoss =
-                        currentPrice.multiply(
-                                        BigDecimal.ONE.subtract(BigDecimal.valueOf(0.02)))
-                                .setScale(4, RoundingMode.HALF_UP);
+                    String reason = hitSl ? "SL" : "TP";
 
-                BigDecimal takeProfit =
-                        currentPrice.multiply(
-                                        BigDecimal.ONE.add(BigDecimal.valueOf(0.04)))
-                                .setScale(4, RoundingMode.HALF_UP);
+                    pos.close(exitFill);
 
-                BigDecimal riskPerTrade =
-                        capital.multiply(BigDecimal.valueOf(0.01));
+                    BigDecimal proceeds = exitFill.multiply(pos.getQuantity())
+                            .subtract(COMMISSION);
 
-                BigDecimal riskPerShare =
-                        currentPrice.subtract(stopLoss).abs();
+                    // Return position proceeds to capital
+                    capital = capital.add(proceeds);
 
-                BigDecimal quantity =
-                        riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
+                    positionManager.getClosedPositions().add(pos);
+                    positionManager.getOpenPositions().remove(pos);
 
-                if (quantity.compareTo(BigDecimal.ZERO) <= 0) {
-                    continue;
+                    // Close trade record
+                    if (!tradeLog.isEmpty()) {
+                        TradeRecord rec = tradeLog.get(tradeLog.size() - 1);
+                        if (rec.getExitPrice() == null) {
+                            rec.close(LocalDateTime.now(), exitFill, reason, i - entryBar);
+                        }
+                    }
+
+                    System.out.println("[BacktestEngine] " + reason + " HIT " + symbol
+                            + " bar=" + i
+                            + " exitFill=" + exitFill.setScale(4, RoundingMode.HALF_UP)
+                            + " pnl=" + pos.getPnl());
+
+                    pendingSignal = false;
                 }
-
-                BigDecimal maxAffordable =
-                        capital.divide(currentPrice, 0, RoundingMode.DOWN);
-
-                quantity = quantity.min(maxAffordable);
-
-                if (quantity.compareTo(BigDecimal.ZERO) <= 0) {
-                    continue;
-                }
-
-                Position position = new Position(
-                        symbol,
-                        currentPrice,
-                        quantity,
-                        stopLoss,
-                        takeProfit
-                );
-
-                positionManager.openPosition(position);
-
-                capital = capital.subtract(COMMISSION);
-
-                System.out.println("BACKTEST BUY: "
-                        + symbol
-                        + " Price=" + currentPrice
-                        + " Qty=" + quantity);
             }
 
+            // ── 2. Delayed fill: enter at bar[i+1] after signal at bar[i] ──────
+            if (pendingSignal && positionManager.getOpenPosition(symbol).isEmpty()) {
+
+                List<Candle> entrySubset = candles.subList(0, i + 1);
+                BigDecimal atr = atrCalc.calculate(entrySubset, 14);
+                MarketRegime entryRegime = regimeService.detect(entrySubset);
+                BigDecimal slippage = slippageService.calculateSlippage(atr, rawPrice, entryRegime);
+
+                BigDecimal entryFill = rawPrice.multiply(BigDecimal.ONE.add(slippage));
+
+                BigDecimal stopLoss = entryFill.multiply(
+                                BigDecimal.ONE.subtract(BigDecimal.valueOf(0.02)))
+                        .setScale(4, RoundingMode.HALF_UP);
+
+                BigDecimal takeProfit = entryFill.multiply(
+                                BigDecimal.ONE.add(BigDecimal.valueOf(0.04)))
+                        .setScale(4, RoundingMode.HALF_UP);
+
+                BigDecimal riskPerTrade = capital.multiply(RISK_PER_TRADE);
+                BigDecimal riskPerShare = entryFill.subtract(stopLoss).abs();
+
+                if (riskPerShare.compareTo(BigDecimal.ZERO) > 0) {
+
+                    BigDecimal quantity = riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
+                    BigDecimal maxAffordable = capital.divide(entryFill, 0, RoundingMode.DOWN);
+                    quantity = quantity.min(maxAffordable);
+
+                    if (quantity.compareTo(BigDecimal.ZERO) > 0) {
+
+                        BigDecimal cost = entryFill.multiply(quantity).add(COMMISSION);
+
+                        if (cost.compareTo(capital) <= 0) {
+
+                            // Deduct capital AT ENTRY
+                            capital = capital.subtract(cost);
+
+                            Position position = new Position(
+                                    symbol, entryFill, quantity, stopLoss, takeProfit);
+                            positionManager.openPosition(position);
+
+                            tradeId = TRADE_COUNTER.incrementAndGet();
+                            TradeRecord rec = new TradeRecord(
+                                    "T" + tradeId, symbol,
+                                    LocalDateTime.now(), entryFill, quantity,
+                                    stopLoss, takeProfit);
+                            tradeLog.add(rec);
+                            entryBar = i;
+
+                            System.out.println("[BacktestEngine] FILL ENTRY " + symbol
+                                    + " bar=" + i
+                                    + " price=" + entryFill.setScale(4, RoundingMode.HALF_UP)
+                                    + " qty=" + quantity
+                                    + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
+                        }
+                    }
+                }
+
+                pendingSignal = false;
+            }
+
+            // ── 3. Evaluate strategy signal (takes effect next bar) ───────────
+            if (positionManager.getOpenPosition(symbol).isEmpty()) {
+                TradingSignal signal = strategy.evaluate(subset);
+                if (signal == TradingSignal.BUY) {
+                    pendingSignal = true;
+                    System.out.println("[BacktestEngine] BUY signal queued at bar=" + i
+                            + " (will fill at bar=" + (i + 1) + ")");
+                }
+            }
+
+            // ── 4. Equity calculation (capital + unrealized PnL) ──────────────
             BigDecimal equity = capital;
-
-            for (Position position : positionManager.getOpenPositions()) {
-
-                BigDecimal unrealized =
-                        currentPrice.subtract(position.getEntryPrice())
-                                .multiply(position.getQuantity());
-
+            for (Position p : positionManager.getOpenPositions()) {
+                BigDecimal unrealized = rawPrice.subtract(p.getEntryPrice())
+                        .multiply(p.getQuantity());
                 equity = equity.add(unrealized);
             }
 
             equityCurve.add(equity);
 
-            if (equity.compareTo(peakEquity) > 0) {
-                peakEquity = equity;
-            }
+            if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
 
-            BigDecimal drawdown =
-                    peakEquity.subtract(equity)
-                            .divide(peakEquity, 6, RoundingMode.HALF_UP);
-
-            if (drawdown.compareTo(maxDrawdown) > 0) {
-                maxDrawdown = drawdown;
-            }
+            BigDecimal drawdown = peakEquity.subtract(equity)
+                    .divide(peakEquity, 6, RoundingMode.HALF_UP);
+            if (drawdown.compareTo(maxDrawdown) > 0) maxDrawdown = drawdown;
         }
 
-        closeRemainingPositions(symbol, candles);
+        // ── 5. Force close any remaining positions at end of data ─────────────
+        capital = closeRemainingPositions(symbol, candles, capital, tradeLog);
 
-        return calculateResults(capital, maxDrawdown);
+        return calculateResults(capital, maxDrawdown, equityCurve, tradeLog);
     }
 
-    private void closeRemainingPositions(String symbol,
-                                         List<Candle> candles) {
+    private BigDecimal closeRemainingPositions(String symbol,
+                                               List<Candle> candles,
+                                               BigDecimal capital,
+                                               List<TradeRecord> tradeLog) {
 
-        if (positionManager.getOpenPositions().isEmpty())
-            return;
+        List<Position> toClose = new ArrayList<>(positionManager.getOpenPositions());
 
-        BigDecimal lastPrice =
-                candles.get(candles.size() - 1).getClose()
-                        .multiply(BigDecimal.ONE.subtract(SLIPPAGE));
+        if (toClose.isEmpty()) return capital;
 
-        for (Position position : positionManager.getOpenPositions()) {
+        BigDecimal lastPrice = candles.get(candles.size() - 1).getClose();
 
-            position.close(lastPrice);
+        for (Position p : toClose) {
+            if (!p.getSymbol().equals(symbol)) continue;
 
-            positionManager.getClosedPositions().add(position);
+            BigDecimal exitFill = lastPrice.multiply(BigDecimal.valueOf(0.9998));
+            p.close(exitFill);
 
-            System.out.println("BACKTEST FORCE CLOSE: "
-                    + symbol
-                    + " Price=" + lastPrice);
+            BigDecimal proceeds = exitFill.multiply(p.getQuantity()).subtract(COMMISSION);
+            capital = capital.add(proceeds);
+
+            positionManager.getClosedPositions().add(p);
+
+            // Close open trade record
+            if (!tradeLog.isEmpty()) {
+                TradeRecord rec = tradeLog.get(tradeLog.size() - 1);
+                if (rec.getExitPrice() == null) {
+                    rec.close(LocalDateTime.now(), exitFill, "FORCE_CLOSE",
+                            candles.size() - 1);
+                }
+            }
+
+            System.out.println("[BacktestEngine] FORCE CLOSE " + symbol
+                    + " exitFill=" + exitFill.setScale(4, RoundingMode.HALF_UP)
+                    + " pnl=" + p.getPnl());
         }
 
-        positionManager.getOpenPositions().clear();
+        positionManager.getOpenPositions().removeAll(toClose);
+
+        return capital;
     }
 
     private BacktestResult calculateResults(BigDecimal capital,
-                                            BigDecimal maxDrawdown) {
+                                            BigDecimal maxDrawdown,
+                                            List<BigDecimal> equityCurve,
+                                            List<TradeRecord> tradeLog) {
 
-        int totalTrades = positionManager.getClosedPositions().size();
+        List<Position> closed = positionManager.getClosedPositions();
+
+        int totalTrades   = closed.size();
         int winningTrades = 0;
-        int losingTrades = 0;
+        int losingTrades  = 0;
 
-        BigDecimal totalPnL = BigDecimal.ZERO;
-        BigDecimal totalWins = BigDecimal.ZERO;
+        BigDecimal totalPnL    = BigDecimal.ZERO;
+        BigDecimal totalWins   = BigDecimal.ZERO;
         BigDecimal totalLosses = BigDecimal.ZERO;
 
-        for (Position position : positionManager.getClosedPositions()) {
-
-            BigDecimal pnl = position.getPnl();
-
+        for (Position p : closed) {
+            BigDecimal pnl = p.getPnl();
+            if (pnl == null) continue;
             totalPnL = totalPnL.add(pnl);
-
             if (pnl.compareTo(BigDecimal.ZERO) > 0) {
                 winningTrades++;
                 totalWins = totalWins.add(pnl);
@@ -192,32 +293,24 @@ public class BacktestEngine {
             }
         }
 
-        BigDecimal endingCapital = capital.add(totalPnL);
+        BigDecimal endingCapital = capital;
 
-        BigDecimal winRate =
-                totalTrades == 0
-                        ? BigDecimal.ZERO
-                        : BigDecimal.valueOf(winningTrades)
-                        .divide(BigDecimal.valueOf(totalTrades), 4, RoundingMode.HALF_UP);
+        BigDecimal winRate = totalTrades == 0 ? BigDecimal.ZERO
+                : BigDecimal.valueOf(winningTrades)
+                .divide(BigDecimal.valueOf(totalTrades), 4, RoundingMode.HALF_UP);
 
-        BigDecimal profitFactor =
-                totalLosses.compareTo(BigDecimal.ZERO) == 0
-                        ? totalWins
-                        : totalWins.divide(totalLosses, 4, RoundingMode.HALF_UP);
+        BigDecimal profitFactor = totalLosses.compareTo(BigDecimal.ZERO) == 0
+                ? totalWins
+                : totalWins.divide(totalLosses, 4, RoundingMode.HALF_UP);
 
-        BigDecimal avgWin =
-                winningTrades == 0
-                        ? BigDecimal.ZERO
-                        : totalWins.divide(BigDecimal.valueOf(winningTrades), 2, RoundingMode.HALF_UP);
+        BigDecimal avgWin = winningTrades == 0 ? BigDecimal.ZERO
+                : totalWins.divide(BigDecimal.valueOf(winningTrades), 2, RoundingMode.HALF_UP);
 
-        BigDecimal avgLoss =
-                losingTrades == 0
-                        ? BigDecimal.ZERO
-                        : totalLosses.divide(BigDecimal.valueOf(losingTrades), 2, RoundingMode.HALF_UP);
+        BigDecimal avgLoss = losingTrades == 0 ? BigDecimal.ZERO
+                : totalLosses.divide(BigDecimal.valueOf(losingTrades), 2, RoundingMode.HALF_UP);
 
-        BigDecimal expectancy =
-                avgWin.multiply(winRate)
-                        .subtract(avgLoss.multiply(BigDecimal.ONE.subtract(winRate)));
+        BigDecimal expectancy = avgWin.multiply(winRate)
+                .subtract(avgLoss.multiply(BigDecimal.ONE.subtract(winRate)));
 
         System.out.println("========== BACKTEST RESULT ==========");
         System.out.println("Trades: " + totalTrades);
@@ -233,13 +326,29 @@ public class BacktestEngine {
         System.out.println("Final Capital: " + endingCapital);
         System.out.println("=====================================");
 
+        // Print trade log CSV header + first few rows
+        if (!tradeLog.isEmpty()) {
+            System.out.println("\n--- TRADE LOG (CSV) ---");
+            System.out.println(TradeRecord.csvHeader());
+            tradeLog.stream().limit(10).forEach(r -> System.out.println(r.toCsvRow()));
+            if (tradeLog.size() > 10) {
+                System.out.println("... and " + (tradeLog.size() - 10) + " more trades");
+            }
+        }
+
         return new BacktestResult(
                 STARTING_CAPITAL,
                 endingCapital,
                 totalTrades,
                 winningTrades,
                 losingTrades,
-                totalPnL
+                totalPnL,
+                winRate,
+                profitFactor,
+                expectancy,
+                maxDrawdown,
+                equityCurve,
+                tradeLog
         );
     }
 }

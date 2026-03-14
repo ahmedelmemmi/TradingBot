@@ -2,6 +2,8 @@ package com.tradingbot.trading.Bot.controller;
 
 import com.tradingbot.trading.Bot.backtest.BacktestEngine;
 import com.tradingbot.trading.Bot.backtest.BacktestResult;
+import com.tradingbot.trading.Bot.backtest.BacktestValidationResult;
+import com.tradingbot.trading.Bot.backtest.BacktestValidationService;
 import com.tradingbot.trading.Bot.backtest.PortfolioBacktestEngine;
 import com.tradingbot.trading.Bot.backtest.PortfolioBacktestResult;
 import com.tradingbot.trading.Bot.broker.BrokerStateService;
@@ -13,6 +15,7 @@ import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -30,6 +33,7 @@ public class TestController {
     private final BrokerStateService brokerStateService;
     private final MarketRegimeService marketRegimeService;
     private final PortfolioBacktestEngine portfolioBacktestEngine;
+    private final BacktestValidationService backtestValidationService;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
@@ -37,17 +41,21 @@ public class TestController {
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
                           IBKRPaperBrokerAdapter brokerAdapter,
-                          BrokerStateService brokerStateService, MarketRegimeService marketRegimeService, PortfolioBacktestEngine portfolioBacktestEngine) {
+                          BrokerStateService brokerStateService,
+                          MarketRegimeService marketRegimeService,
+                          PortfolioBacktestEngine portfolioBacktestEngine,
+                          BacktestValidationService backtestValidationService) {
 
-        this.marketDataService = marketDataService;
-        this.rsiStrategyService = rsiStrategyService;
-        this.tradeDecisionService = tradeDecisionService;
-        this.positionManager = positionManager;
-        this.backtestEngine = backtestEngine;
-        this.brokerAdapter = brokerAdapter;
-        this.brokerStateService = brokerStateService;
-        this.marketRegimeService = marketRegimeService;
-        this.portfolioBacktestEngine = portfolioBacktestEngine;
+        this.marketDataService         = marketDataService;
+        this.rsiStrategyService        = rsiStrategyService;
+        this.tradeDecisionService      = tradeDecisionService;
+        this.positionManager           = positionManager;
+        this.backtestEngine            = backtestEngine;
+        this.brokerAdapter             = brokerAdapter;
+        this.brokerStateService        = brokerStateService;
+        this.marketRegimeService       = marketRegimeService;
+        this.portfolioBacktestEngine   = portfolioBacktestEngine;
+        this.backtestValidationService = backtestValidationService;
     }
 
     /*
@@ -317,6 +325,77 @@ public class TestController {
                 market,
                 rsiStrategyService
         );
+    }
+
+    /*
+    ======================================================
+    ✅ BACKTEST VALIDATION ENDPOINT
+    Runs uptrend backtest, validates all criteria, returns
+    pass/fail report. Blocks live trading if validation fails.
+    ======================================================
+     */
+    @GetMapping("/backtest/validate")
+    public Map<String, Object> validateBacktest() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1000,
+                        MockMarketDataService.MarketScenario.STRONG_UPTREND
+                );
+
+        BacktestResult result = backtestEngine.runStrategy(
+                "AAPL", candles, rsiStrategyService);
+
+        BacktestValidationResult validation =
+                backtestValidationService.validate(
+                        positionManager.getClosedPositions(),
+                        result.getEquityCurve(),
+                        result.getStartingCapital()
+                );
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("valid",              validation.isValid());
+        response.put("totalTrades",        validation.getTotalTrades());
+        response.put("winRate",            validation.getWinRate());
+        response.put("expectancy",         validation.getExpectancy());
+        response.put("profitFactor",       validation.getProfitFactor());
+        response.put("maxDrawdown",        validation.getMaxDrawdown());
+        response.put("avgWin",             validation.getAvgWin());
+        response.put("avgLoss",            validation.getAvgLoss());
+        response.put("tradeCountPass",     validation.isTradeCountPass());
+        response.put("winRatePass",        validation.isWinRatePass());
+        response.put("expectancyPass",     validation.isExpectancyPass());
+        response.put("profitFactorPass",   validation.isProfitFactorPass());
+        response.put("drawdownPass",       validation.isDrawdownPass());
+        response.put("rrRatioPass",        validation.isRrRatioPass());
+        response.put("failureReasons",     validation.getFailureReasons());
+        response.put("liveTradingAllowed", validation.isValid());
+
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ TRADE LOG CSV EXPORT
+    Returns the full trade log for the last uptrend backtest
+    in CSV format for external analysis.
+    ======================================================
+     */
+    @GetMapping(value = "/backtest/tradelog", produces = MediaType.TEXT_PLAIN_VALUE)
+    public String tradeLogCsv() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1000,
+                        MockMarketDataService.MarketScenario.STRONG_UPTREND
+                );
+
+        BacktestResult result = backtestEngine.runStrategy(
+                "AAPL", candles, rsiStrategyService);
+
+        return result.getTradeLogCsv();
     }
 
 }

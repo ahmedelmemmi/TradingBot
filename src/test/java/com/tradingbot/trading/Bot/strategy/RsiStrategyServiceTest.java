@@ -17,7 +17,11 @@ class RsiStrategyServiceTest {
 
     @BeforeEach
     void setUp() {
-        strategy = new RsiStrategyService(new RsiCalculator());
+        strategy = new RsiStrategyService(
+                new RsiCalculator(),
+                new TrendPersistenceService(),
+                new VolatilityFilterService()
+        );
     }
 
     @Test

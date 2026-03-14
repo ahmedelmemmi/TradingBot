@@ -19,7 +19,8 @@ public class MarketRegimeService {
         CRASH
     }
 
-    private static final int REGIME_PERSISTENCE_COUNT = 3;
+    /** Number of consecutive bars a non-crash regime must hold before confirming. */
+    private static final int REGIME_PERSISTENCE_COUNT = 5;
 
     private MarketRegime lastConfirmedRegime = MarketRegime.SIDEWAYS;
     private MarketRegime candidateRegime = MarketRegime.SIDEWAYS;
