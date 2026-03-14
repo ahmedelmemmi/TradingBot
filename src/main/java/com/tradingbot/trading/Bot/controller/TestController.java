@@ -35,6 +35,10 @@ import java.util.*;
 
 @RestController
 public class TestController {
+
+    /** Maximum candle count fetched by real-data diagnostic endpoints. */
+    private static final int MAX_CANDLES_FOR_DIAGNOSTICS = 1000;
+
     private final MockMarketDataService marketDataService;
     private final RsiStrategyService rsiStrategyService;
     private final PerfectBreakoutStrategy perfectBreakoutStrategy;
@@ -859,7 +863,7 @@ public class TestController {
         LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
         LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
 
-        List<Candle> candles = yahooFinanceMarketDataProvider.getCandles("SPY", 1000, from, to);
+        List<Candle> candles = yahooFinanceMarketDataProvider.getCandles("SPY", MAX_CANDLES_FOR_DIAGNOSTICS, from, to);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("symbol",      "SPY");
@@ -939,7 +943,7 @@ public class TestController {
             if (volumeRatio.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT)) < 0) continue;
             volumePass++;
 
-            // ── Condition 4: Price breakout above 5-bar high + 0.05% buffer ───
+            // ── Condition 4: Price breakout above 5-bar high + buffer ───────────
             BigDecimal highest5      = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
             BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(SimplifiedBreakoutStrategy.BREAKOUT_BUFFER));
 
@@ -1023,9 +1027,12 @@ public class TestController {
                     + "can be erratic around earnings/holidays. Lower MIN_VOLUME_RATIO_PCT "
                     + "in SimplifiedBreakoutStrategy.";
         } else if (breakoutPass == 0) {
+            double bufferPct = (SimplifiedBreakoutStrategy.BREAKOUT_BUFFER - 1.0) * 100.0;
             diagnosis = "❌ ROOT CAUSE — BREAKOUT: Price never breaks above the "
-                    + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "-bar high + 0.05% buffer "
-                    + "while the other conditions hold. Consider reducing the BREAKOUT_BUFFER.";
+                    + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "-bar high + "
+                    + String.format("%.2f", bufferPct) + "% buffer "
+                    + "while the other conditions hold. "
+                    + "Run /backtest/debug/real-data-breakout-test to find the first buffer level that generates trades.";
         } else if (rsiPass == 0) {
             diagnosis = "❌ ROOT CAUSE — RSI: RSI is below " + (int) SimplifiedBreakoutStrategy.RSI_MIN
                     + " on all " + breakoutPass + " breakout bars. Lower RSI_MIN in "
@@ -1043,6 +1050,129 @@ public class TestController {
     }
 
     // ── Private diagnostic helpers ────────────────────────────────────────────
+
+    /*
+    ======================================================
+    ✅ BREAKOUT BUFFER SWEEP: Find the minimum buffer that generates trades
+    Downloads real SPY data and counts how many bars produce a price breakout
+    at each of six candidate BREAKOUT_BUFFER multipliers.
+
+    Use this endpoint when /backtest/debug/real-data reports
+    "Price never breaks above the 5-bar high" to identify the
+    first buffer level that actually generates signals.
+
+    The response also indicates which buffer is currently active in
+    SimplifiedBreakoutStrategy and recommends the tightest buffer
+    (smallest % above the 5-bar high) that yields at least 10 breakouts.
+    ======================================================
+     */
+    @GetMapping("/backtest/debug/real-data-breakout-test")
+    public Map<String, Object> testBreakoutLevels() {
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("BREAKOUT BUFFER SWEEP — Find minimum buffer that generates trades");
+        System.out.println("=".repeat(80));
+
+        LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        List<Candle> candles = yahooFinanceMarketDataProvider.getCandles("SPY", MAX_CANDLES_FOR_DIAGNOSTICS, from, to);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol",       "SPY");
+        response.put("dateFrom",     from.toString());
+        response.put("dateTo",       to.toString());
+        response.put("totalCandles", candles.size());
+        response.put("activeBuffer", SimplifiedBreakoutStrategy.BREAKOUT_BUFFER
+                + " (" + String.format("%.3f", (SimplifiedBreakoutStrategy.BREAKOUT_BUFFER - 1.0) * 100) + "% above 5-bar high)");
+
+        if (candles.isEmpty()) {
+            response.put("error", "Yahoo Finance returned 0 candles. Check network connectivity.");
+            return response;
+        }
+
+        // Candidate multipliers to sweep (1 + buffer fraction)
+        double[] buffers = {
+            1.00001,  // 0.001%
+            1.0001,   // 0.01%
+            1.0005,   // 0.05%
+            1.0020,   // 0.20%
+            1.0050,   // 0.50%
+            1.0100,   // 1.00%
+        };
+
+        // Pre-compute which bars pass conditions 1-3 (regime + ATR + volume) so
+        // we re-use this funnel for every buffer without re-running the full loop.
+        marketRegimeService.reset();
+        AtrCalculator atrCalc = new AtrCalculator();
+        List<Integer> funnelIndices = new ArrayList<>();
+
+        for (int i = SimplifiedBreakoutStrategy.MIN_CANDLES; i < candles.size(); i++) {
+            List<Candle> subset = candles.subList(0, i + 1);
+            MarketRegimeService.MarketRegime regime = marketRegimeService.detect(subset);
+            if (regime != MarketRegimeService.MarketRegime.STRONG_UPTREND) continue;
+
+            Candle current = subset.get(subset.size() - 1);
+            BigDecimal price = current.getClose();
+
+            BigDecimal atr    = atrCalc.calculate(subset, 14);
+            BigDecimal atrPct = price.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
+                    : atr.divide(price, 6, RoundingMode.HALF_UP);
+            if (atrPct.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT)) < 0) continue;
+
+            long avgVol     = diagAvgVolume(subset, 20);
+            long currentVol = current.getVolume();
+            BigDecimal volumeRatio = (avgVol == 0) ? BigDecimal.ZERO
+                    : BigDecimal.valueOf(currentVol).divide(BigDecimal.valueOf(avgVol), 6, RoundingMode.HALF_UP);
+            if (volumeRatio.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT)) < 0) continue;
+
+            funnelIndices.add(i);
+        }
+
+        int funnelSize = funnelIndices.size();
+        response.put("barsPassingConditions1to3", funnelSize);
+
+        // Now sweep each buffer
+        Map<String, Object> bufferResults = new LinkedHashMap<>();
+        String recommendation = null;
+
+        for (double buffer : buffers) {
+            int breakouts = 0;
+            for (int idx : funnelIndices) {
+                List<Candle> subset = candles.subList(0, idx + 1);
+                BigDecimal price    = subset.get(subset.size() - 1).getClose();
+                BigDecimal highest5 = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
+                BigDecimal level    = highest5.multiply(BigDecimal.valueOf(buffer));
+                if (price.compareTo(level) > 0) breakouts++;
+            }
+
+            double pct = (buffer - 1.0) * 100.0;
+            String key = String.format("buffer_%.3f_pct", pct);
+            String label = String.format("%.3f%% (multiplier %.5f): %d/%d breakouts",
+                    pct, buffer, breakouts, funnelSize);
+            bufferResults.put(key, label);
+
+            System.out.printf("  Buffer %.3f%% → %d breakouts%n", pct, breakouts);
+
+            if (recommendation == null && breakouts >= 10) {
+                recommendation = String.format(
+                        "✅ First buffer with ≥10 breakouts: %.3f%% (multiplier=%.5f, %d trades). "
+                        + "Set BREAKOUT_BUFFER=%.5f in SimplifiedBreakoutStrategy.java.",
+                        pct, buffer, breakouts, buffer);
+            }
+        }
+
+        response.put("bufferSweep", bufferResults);
+        response.put("recommendation", recommendation != null ? recommendation
+                : "❌ No buffer level (up to 1.00%) produced ≥10 breakouts. "
+                  + "The breakout condition is not the bottleneck — investigate regime or data quality.");
+
+        System.out.println("SWEEP COMPLETE — " + (recommendation != null ? recommendation
+                : "No buffer reached 10 breakouts"));
+        System.out.println("=".repeat(80) + "\n");
+
+        return response;
+    }
 
     /** Highest high of the last {@code period} bars, excluding the current bar. */
     private BigDecimal diagHighestHigh(List<Candle> candles, int period) {
