@@ -6,7 +6,6 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
-
 @Service
 public class RsiStrategyService implements Strategy {
 
@@ -18,57 +17,46 @@ public class RsiStrategyService implements Strategy {
 
     @Override
     public String getName() {
-        return "RSI Mean Reversion";
+        return "RSI Pullback Trend";
     }
 
     @Override
     public TradingSignal evaluate(List<Candle> candles) {
 
-        System.out.println("RSI evaluate called. Candle size: " + candles.size());
-
-        if (candles.size() < 21) {
-            System.out.println("Not enough candles yet.");
+        if (candles.size() < 60) {
             return TradingSignal.HOLD;
         }
 
         BigDecimal rsi = rsiCalculator.calculate(candles);
-        BigDecimal ma20 = calculateMA(candles, 20);
 
-        Candle last = candles.get(candles.size() - 1);
-        Candle prev = candles.get(candles.size() - 2);
+        BigDecimal ma20 = ma(candles,20);
+        BigDecimal ma50 = ma(candles,50);
 
-        BigDecimal lastPrice = last.getClose();
-        BigDecimal prevPrice = prev.getClose();
+        BigDecimal price =
+                candles.get(candles.size()-1).getClose();
 
-        System.out.println("RSI = " + rsi);
-        System.out.println("MA20 = " + ma20);
-        System.out.println("Last price = " + lastPrice);
+        // only trade strong structure
+        if (ma20.compareTo(ma50) < 0) {
+            return TradingSignal.HOLD;
+        }
 
-        boolean oversold = rsi.compareTo(BigDecimal.valueOf(30)) < 0;
-        boolean belowMA = lastPrice.compareTo(ma20) < 0;
-        boolean bounce = lastPrice.compareTo(prevPrice) > 0;
+        // only buy pullback
+        if (price.compareTo(ma20) < 0 &&
+                rsi.compareTo(BigDecimal.valueOf(35)) > 0 &&
+                rsi.compareTo(BigDecimal.valueOf(50)) < 0) {
 
-        if (oversold && belowMA && bounce) {
-
-            System.out.println("BUY signal:");
-            System.out.println("RSI oversold ✔");
-            System.out.println("Price below MA ✔");
-            System.out.println("Bounce confirmed ✔");
-
+            System.out.println("BUY TREND PULLBACK");
             return TradingSignal.BUY;
         }
 
         return TradingSignal.HOLD;
     }
 
-    private BigDecimal calculateMA(List<Candle> candles, int period) {
-
-        BigDecimal sum = BigDecimal.ZERO;
-
-        for (int i = candles.size() - period; i < candles.size(); i++) {
-            sum = sum.add(candles.get(i).getClose());
+    private BigDecimal ma(List<Candle> c,int p){
+        BigDecimal s = BigDecimal.ZERO;
+        for(int i=c.size()-p;i<c.size();i++){
+            s=s.add(c.get(i).getClose());
         }
-
-        return sum.divide(BigDecimal.valueOf(period), 4, RoundingMode.HALF_UP);
+        return s.divide(BigDecimal.valueOf(p),6, RoundingMode.HALF_UP);
     }
 }

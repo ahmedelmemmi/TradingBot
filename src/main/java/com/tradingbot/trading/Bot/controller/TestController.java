@@ -2,11 +2,14 @@ package com.tradingbot.trading.Bot.controller;
 
 import com.tradingbot.trading.Bot.backtest.BacktestEngine;
 import com.tradingbot.trading.Bot.backtest.BacktestResult;
+import com.tradingbot.trading.Bot.backtest.PortfolioBacktestEngine;
+import com.tradingbot.trading.Bot.backtest.PortfolioBacktestResult;
 import com.tradingbot.trading.Bot.broker.BrokerStateService;
 import com.tradingbot.trading.Bot.broker.IBKRPaperBrokerAdapter;
 import com.tradingbot.trading.Bot.domain.Candle;
 import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
+import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
@@ -25,6 +28,8 @@ public class TestController {
     private final BacktestEngine backtestEngine;
     private final IBKRPaperBrokerAdapter brokerAdapter;
     private final BrokerStateService brokerStateService;
+    private final MarketRegimeService marketRegimeService;
+    private final PortfolioBacktestEngine portfolioBacktestEngine;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
@@ -32,7 +37,7 @@ public class TestController {
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
                           IBKRPaperBrokerAdapter brokerAdapter,
-                          BrokerStateService brokerStateService) {
+                          BrokerStateService brokerStateService, MarketRegimeService marketRegimeService, PortfolioBacktestEngine portfolioBacktestEngine) {
 
         this.marketDataService = marketDataService;
         this.rsiStrategyService = rsiStrategyService;
@@ -41,6 +46,8 @@ public class TestController {
         this.backtestEngine = backtestEngine;
         this.brokerAdapter = brokerAdapter;
         this.brokerStateService = brokerStateService;
+        this.marketRegimeService = marketRegimeService;
+        this.portfolioBacktestEngine = portfolioBacktestEngine;
     }
 
     /*
@@ -229,6 +236,87 @@ public class TestController {
     @GetMapping("/broker-state")
     public Object brokerState() {
         return brokerStateService.getPositions();
+    }
+
+    @GetMapping("/regime-test")
+    public Object regimeTest() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        500,
+                        MockMarketDataService.MarketScenario.STRONG_DOWNTREND
+                );
+
+        var regime = marketRegimeService.detect(candles);
+
+        BigDecimal lastPrice =
+                candles.get(candles.size() - 1).getClose();
+
+        return Map.of(
+                "regime", regime,
+                "lastPrice", lastPrice,
+                "candles", candles.size()
+        );
+    }
+
+    @GetMapping("/regime-debug")
+    public Object regimeDebug() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        500,
+                        MockMarketDataService.MarketScenario.CRASH
+                );
+
+        var metrics = marketRegimeService.debugMetrics(candles);
+
+        return metrics;
+    }
+
+    /*
+    ======================================================
+    ✅ PROFESSIONAL PORTFOLIO BACKTEST
+    ======================================================
+     */
+    @GetMapping("/backtest/portfolio/pro")
+    public PortfolioBacktestResult runPortfolioBacktest() {
+
+        Map<String, List<Candle>> market = new HashMap<>();
+
+        market.put("AAPL",
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1500,
+                        MockMarketDataService.MarketScenario.SIDEWAYS_VOLATILE
+                ));
+
+        market.put("MSFT",
+                marketDataService.generateCandles(
+                        "MSFT",
+                        1500,
+                        MockMarketDataService.MarketScenario.STRONG_UPTREND
+                ));
+
+        market.put("NVDA",
+                marketDataService.generateCandles(
+                        "NVDA",
+                        1500,
+                        MockMarketDataService.MarketScenario.CRASH
+                ));
+
+        market.put("TSLA",
+                marketDataService.generateCandles(
+                        "TSLA",
+                        1500,
+                        MockMarketDataService.MarketScenario.RANDOM
+                ));
+
+        return portfolioBacktestEngine.runPortfolio(
+                market,
+                rsiStrategyService
+        );
     }
 
 }
