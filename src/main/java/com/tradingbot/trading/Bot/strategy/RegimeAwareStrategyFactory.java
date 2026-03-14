@@ -11,33 +11,41 @@ import java.util.List;
  *
  * <p>Decision tree:</p>
  * <ul>
- *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link TrendFollowingStrategy}</li>
- *   <li>{@link MarketRegime#SIDEWAYS} → {@link MeanReversionStrategy}</li>
- *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link VolatilityBreakoutStrategy}</li>
- *   <li>{@link MarketRegime#STRONG_DOWNTREND} → {@code null} (no trading)</li>
- *   <li>{@link MarketRegime#CRASH} → {@code null} (emergency halt)</li>
+ *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link SimpleTrendFollowingStrategy}</li>
+ *   <li>{@link MarketRegime#SIDEWAYS} → {@link StrictMeanReversionStrategy}</li>
+ *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link NoTradeStrategy} (preserve capital)</li>
+ *   <li>{@link MarketRegime#STRONG_DOWNTREND} → {@link NoTradeStrategy} (preserve capital)</li>
+ *   <li>{@link MarketRegime#CRASH} → {@link NoTradeStrategy} (emergency halt)</li>
  * </ul>
  */
 @Service
 public class RegimeAwareStrategyFactory {
 
-    private final TrendFollowingStrategy    trendFollowing    = new TrendFollowingStrategy();
-    private final MeanReversionStrategy     meanReversion     = new MeanReversionStrategy();
-    private final VolatilityBreakoutStrategy volatilityBreakout = new VolatilityBreakoutStrategy();
+    private final SimpleTrendFollowingStrategy simpleTrendFollowing = new SimpleTrendFollowingStrategy();
+    private final StrictMeanReversionStrategy  strictMeanReversion  = new StrictMeanReversionStrategy();
+    private final NoTradeStrategy              noTrade              = new NoTradeStrategy();
 
     /**
-     * Returns the appropriate strategy for the given regime, or {@code null} if
-     * trading should be halted (DOWNTREND or CRASH).
+     * Returns the appropriate strategy for the given regime.
+     * Never returns {@code null} — unfavourable regimes return {@link NoTradeStrategy}.
      *
      * @param regime current market regime
-     * @return strategy instance, or {@code null} for no-trade regimes
+     * @return strategy instance (never null)
      */
     public Strategy getStrategy(MarketRegime regime) {
         return switch (regime) {
-            case STRONG_UPTREND    -> trendFollowing;
-            case SIDEWAYS          -> meanReversion;
-            case HIGH_VOLATILITY   -> volatilityBreakout;
-            case STRONG_DOWNTREND, CRASH -> null; // capital preservation
+            case STRONG_UPTREND -> {
+                System.out.println("[Factory] Selecting SimpleTrendFollowingStrategy (STRONG_UPTREND)");
+                yield simpleTrendFollowing;
+            }
+            case SIDEWAYS -> {
+                System.out.println("[Factory] Selecting StrictMeanReversionStrategy (SIDEWAYS)");
+                yield strictMeanReversion;
+            }
+            case STRONG_DOWNTREND, CRASH, HIGH_VOLATILITY -> {
+                System.out.println("[Factory] Selecting NoTradeStrategy (" + regime + ") - preserving capital");
+                yield noTrade;
+            }
         };
     }
 
@@ -46,14 +54,10 @@ public class RegimeAwareStrategyFactory {
      * strategy is active.
      */
     public TradingSignal evaluate(MarketRegime regime, List<Candle> candles) {
-        Strategy strategy = getStrategy(regime);
-        if (strategy == null) {
-            return TradingSignal.HOLD;
-        }
-        return strategy.evaluate(candles);
+        return getStrategy(regime).evaluate(candles);
     }
 
-    public TrendFollowingStrategy getTrendFollowingStrategy()       { return trendFollowing; }
-    public MeanReversionStrategy getMeanReversionStrategy()         { return meanReversion; }
-    public VolatilityBreakoutStrategy getVolatilityBreakoutStrategy() { return volatilityBreakout; }
+    public SimpleTrendFollowingStrategy getSimpleTrendFollowingStrategy() { return simpleTrendFollowing; }
+    public StrictMeanReversionStrategy getStrictMeanReversionStrategy()   { return strictMeanReversion; }
+    public NoTradeStrategy getNoTradeStrategy()                           { return noTrade; }
 }

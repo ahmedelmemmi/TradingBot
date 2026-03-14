@@ -118,7 +118,8 @@ public class BacktestEngine {
                     if (!tradeLog.isEmpty()) {
                         TradeRecord rec = tradeLog.get(tradeLog.size() - 1);
                         if (rec.getExitPrice() == null) {
-                            rec.close(LocalDateTime.now(), exitFill, reason, i - entryBar);
+                            rec.close(LocalDateTime.now(), exitFill, reason,
+                                    regime.name(), i - entryBar);
                         }
                     }
 
@@ -174,6 +175,7 @@ public class BacktestEngine {
                             tradeId = TRADE_COUNTER.incrementAndGet();
                             TradeRecord rec = new TradeRecord(
                                     "T" + tradeId, symbol,
+                                    strategy.getName(), entryRegime.name(),
                                     LocalDateTime.now(), entryFill, quantity,
                                     stopLoss, takeProfit);
                             tradeLog.add(rec);
@@ -251,7 +253,7 @@ public class BacktestEngine {
                 TradeRecord rec = tradeLog.get(tradeLog.size() - 1);
                 if (rec.getExitPrice() == null) {
                     rec.close(LocalDateTime.now(), exitFill, "FORCE_CLOSE",
-                            candles.size() - 1);
+                            "", candles.size() - 1);
                 }
             }
 
