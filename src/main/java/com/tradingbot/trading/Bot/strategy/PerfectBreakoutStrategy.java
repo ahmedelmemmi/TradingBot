@@ -41,22 +41,22 @@ public class PerfectBreakoutStrategy implements Strategy {
     static final int CONSOLIDATION_PERIOD = 8;
 
     /** Maximum allowed high-to-low range (as fraction of low) for a valid consolidation. */
-    static final double MAX_CONSOLIDATION_RANGE_PCT = 0.015; // 1.5%
+    static final double MAX_CONSOLIDATION_RANGE_PCT = 0.025; // 2.5%
 
     /** Number of bars immediately before the breakout bar that must show low volume. */
-    static final int VOLUME_DRY_PERIOD = 3;
+    static final int VOLUME_DRY_PERIOD = 2;
 
     /** Volume threshold (fraction of 20-bar average) below which a bar is "dry". */
     static final double VOLUME_DRY_THRESHOLD = 0.6; // 60%
 
     /** Minimum volume ratio (current / 20-bar avg) required to confirm a spike. */
-    static final double VOLUME_SPIKE_MULTIPLE = 1.8; // 80% above average
+    static final double VOLUME_SPIKE_MULTIPLE = 1.3; // 30% above average
 
     /** RSI of the bar BEFORE the breakout must be below this level. */
-    static final double RSI_PREV_MAX = 50.0;
+    static final double RSI_PREV_MAX = 55.0;
 
     /** RSI of the breakout bar must be at or above this level. */
-    static final double RSI_BREAKOUT_LEVEL = 55.0;
+    static final double RSI_BREAKOUT_LEVEL = 60.0;
 
     /** Breakout buffer above consolidation high (0.2%). */
     static final double BREAKOUT_BUFFER = 1.002;
@@ -102,13 +102,17 @@ public class PerfectBreakoutStrategy implements Strategy {
                 .subtract(consolidationLow)
                 .divide(consolidationLow, 6, RoundingMode.HALF_UP);
 
+        System.out.println("[DEBUG] Bar " + candles.size()
+                + " | Consolidation range: " + fmt(consolidationRange)
+                + " (threshold: " + fmt(BigDecimal.valueOf(MAX_CONSOLIDATION_RANGE_PCT)) + ")");
+
         if (consolidationRange.compareTo(BigDecimal.valueOf(MAX_CONSOLIDATION_RANGE_PCT)) > 0) {
-            System.out.println("[PerfectBreakout] REJECT - Range too wide: "
-                    + consolidationRange.setScale(4, RoundingMode.HALF_UP));
+            System.out.println("  → REJECT: Range too wide");
             return TradingSignal.HOLD;
         }
+        System.out.println("  → PASS: Consolidation tight");
 
-        // ── Condition 2: VOLUME DRY-UP (3 bars before breakout all low-volume) ──
+        // ── Condition 2: VOLUME DRY-UP (bars before breakout all low-volume) ──
         long avgVolume20 = getAverageVolume(candles, VOLUME_AVG_PERIOD);
         if (avgVolume20 == 0) {
             return TradingSignal.HOLD;
@@ -121,70 +125,85 @@ public class PerfectBreakoutStrategy implements Strategy {
             }
         }
 
+        System.out.println("[DEBUG] Volume dry-up: " + dryBars
+                + " bars (threshold: " + VOLUME_DRY_PERIOD + ")");
+
         if (dryBars < VOLUME_DRY_PERIOD) {
-            System.out.println("[PerfectBreakout] REJECT - No volume compression: "
-                    + dryBars + "/" + VOLUME_DRY_PERIOD + " dry bars");
+            System.out.println("  → REJECT: Not enough dry bars");
             return TradingSignal.HOLD;
         }
+        System.out.println("  → PASS: Volume compressed");
 
-        // ── Condition 3: VOLUME SPIKE (current bar ≥ 1.8× average) ──────────
-        BigDecimal volumeRatio = BigDecimal.valueOf(current.getVolume())
-                .divide(BigDecimal.valueOf(avgVolume20), 6, RoundingMode.HALF_UP);
+        // ── Condition 3: VOLUME SPIKE (current bar ≥ VOLUME_SPIKE_MULTIPLE × avg) ──
+        long currentVolume = current.getVolume();
+        BigDecimal volumeRatio = (avgVolume20 == 0 || currentVolume == 0) ? BigDecimal.ZERO
+                : BigDecimal.valueOf(currentVolume)
+                        .divide(BigDecimal.valueOf(avgVolume20), 6, RoundingMode.HALF_UP);
+
+        System.out.println("[DEBUG] Volume spike: " + fmt(volumeRatio)
+                + "x (threshold: " + fmt(BigDecimal.valueOf(VOLUME_SPIKE_MULTIPLE)) + "x)");
 
         if (volumeRatio.compareTo(BigDecimal.valueOf(VOLUME_SPIKE_MULTIPLE)) < 0) {
-            System.out.println("[PerfectBreakout] REJECT - Volume spike not strong: "
-                    + volumeRatio.setScale(2, RoundingMode.HALF_UP) + "x (need "
-                    + VOLUME_SPIKE_MULTIPLE + "x)");
+            System.out.println("  → REJECT: Volume spike not strong enough");
             return TradingSignal.HOLD;
         }
+        System.out.println("  → PASS: Volume spiked");
 
         // ── Condition 4: PRICE BREAKOUT (above consolidation high + 0.2% buffer) ──
         BigDecimal breakoutLevel = consolidationHigh.multiply(BigDecimal.valueOf(BREAKOUT_BUFFER));
+
+        System.out.println("[DEBUG] Price breakout: " + fmt(price)
+                + " vs " + fmt(breakoutLevel)
+                + " (diff: " + fmt(price.subtract(breakoutLevel)) + ")");
+
         if (price.compareTo(breakoutLevel) <= 0) {
-            System.out.println("[PerfectBreakout] REJECT - No breakout above "
-                    + breakoutLevel.setScale(4, RoundingMode.HALF_UP));
+            System.out.println("  → REJECT: No price breakout");
             return TradingSignal.HOLD;
         }
+        System.out.println("  → PASS: Price broke out");
 
-        // ── Condition 5: RSI MOMENTUM FLIP (prev RSI < 50, current RSI ≥ 55) ──
+        // ── Condition 5: RSI MOMENTUM FLIP (prev RSI < RSI_PREV_MAX, current RSI ≥ RSI_BREAKOUT_LEVEL) ──
         BigDecimal rsiPrev    = rsiCalculator.calculate(candles.subList(0, candles.size() - 1));
         BigDecimal rsiCurrent = rsiCalculator.calculate(candles);
 
+        System.out.println("[DEBUG] RSI momentum: " + fmt(rsiPrev)
+                + " → " + fmt(rsiCurrent)
+                + " (threshold: <" + RSI_PREV_MAX + " → >=" + RSI_BREAKOUT_LEVEL + ")");
+
         if (rsiPrev.compareTo(BigDecimal.valueOf(RSI_PREV_MAX)) >= 0) {
-            System.out.println("[PerfectBreakout] REJECT - RSI already elevated before breakout: "
-                    + rsiPrev.setScale(2, RoundingMode.HALF_UP));
+            System.out.println("  → REJECT: RSI already elevated (prev)");
             return TradingSignal.HOLD;
         }
 
         if (rsiCurrent.compareTo(BigDecimal.valueOf(RSI_BREAKOUT_LEVEL)) < 0) {
-            System.out.println("[PerfectBreakout] REJECT - RSI breakout confirmation weak: "
-                    + rsiCurrent.setScale(2, RoundingMode.HALF_UP));
+            System.out.println("  → REJECT: RSI not at breakout level");
             return TradingSignal.HOLD;
         }
+        System.out.println("  → PASS: RSI momentum confirmed");
 
         // ── Condition 6: REGIME (STRONG_UPTREND only) ─────────────────────────
         MarketRegime regime = regimeService.detect(candles);
+
+        System.out.println("[DEBUG] Market regime: " + regime);
+
         if (regime != MarketRegime.STRONG_UPTREND) {
-            System.out.println("[PerfectBreakout] REJECT - Wrong regime: " + regime);
+            System.out.println("  → REJECT: Not in STRONG_UPTREND");
             return TradingSignal.HOLD;
         }
+        System.out.println("  → PASS: Regime is STRONG_UPTREND");
 
         // ── ✅ ALL CONDITIONS MET ──────────────────────────────────────────────
-        System.out.println("[PerfectBreakout] ✅ PERFECT BREAKOUT ENTRY");
-        System.out.println("  Consolidation range : "
-                + consolidationRange.setScale(4, RoundingMode.HALF_UP) + " (≤ "
-                + MAX_CONSOLIDATION_RANGE_PCT + ")");
-        System.out.println("  Volume dry-up       : " + dryBars + " bars");
-        System.out.println("  Volume spike        : "
-                + volumeRatio.setScale(2, RoundingMode.HALF_UP) + "x");
-        System.out.println("  Price breakout      : "
-                + price.setScale(4, RoundingMode.HALF_UP) + " > "
-                + breakoutLevel.setScale(4, RoundingMode.HALF_UP));
-        System.out.println("  RSI flip            : "
-                + rsiPrev.setScale(2, RoundingMode.HALF_UP) + " → "
-                + rsiCurrent.setScale(2, RoundingMode.HALF_UP));
+        System.out.println("[PerfectBreakout] ✅✅✅ PERFECT ENTRY SIGNAL ✅✅✅");
+        System.out.println("  Consolidation: " + fmt(consolidationRange));
+        System.out.println("  Volume: " + dryBars + " dry bars → " + fmt(volumeRatio) + "x spike");
+        System.out.println("  Price: " + fmt(price) + " > " + fmt(breakoutLevel));
+        System.out.println("  RSI: " + fmt(rsiPrev) + " → " + fmt(rsiCurrent));
 
         return TradingSignal.BUY;
+    }
+
+    private String fmt(BigDecimal v) {
+        return v.setScale(4, RoundingMode.HALF_UP).toPlainString();
     }
 
     // ── Stop / Take-Profit helpers (used by the backtest engine) ─────────────
