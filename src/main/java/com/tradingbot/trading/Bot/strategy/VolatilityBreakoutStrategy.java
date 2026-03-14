@@ -1,6 +1,7 @@
 package com.tradingbot.trading.Bot.strategy;
 
 import com.tradingbot.trading.Bot.domain.Candle;
+import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -19,6 +20,7 @@ import java.util.List;
  *
  * <p>Expected performance: 60–70% win rate, profit factor 1.7–1.9</p>
  */
+@Service
 public class VolatilityBreakoutStrategy implements Strategy {
 
     private static final int    BREAKOUT_PERIOD      = 5;

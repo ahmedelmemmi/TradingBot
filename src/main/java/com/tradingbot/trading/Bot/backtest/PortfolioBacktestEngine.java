@@ -307,9 +307,9 @@ public class PortfolioBacktestEngine {
      *
      * <p>Regime-to-strategy mapping:</p>
      * <ul>
-     *   <li>STRONG_UPTREND → TrendFollowingStrategy</li>
-     *   <li>SIDEWAYS → MeanReversionStrategy</li>
-     *   <li>HIGH_VOLATILITY → VolatilityBreakoutStrategy</li>
+     *   <li>STRONG_UPTREND → SimplifiedBreakoutStrategy (breakout in trends)</li>
+     *   <li>SIDEWAYS → MeanReversionStrategy (mean reversion in ranges)</li>
+     *   <li>HIGH_VOLATILITY → VolatilityBreakoutStrategy (directional spikes)</li>
      *   <li>STRONG_DOWNTREND / CRASH → no trading (capital preserved)</li>
      * </ul>
      *

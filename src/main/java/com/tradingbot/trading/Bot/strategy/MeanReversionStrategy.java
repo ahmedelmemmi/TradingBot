@@ -1,6 +1,7 @@
 package com.tradingbot.trading.Bot.strategy;
 
 import com.tradingbot.trading.Bot.domain.Candle;
+import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -19,6 +20,7 @@ import java.util.List;
  *
  * <p>Expected performance: 55–65% win rate, profit factor 1.8–2.2</p>
  */
+@Service
 public class MeanReversionStrategy implements Strategy {
 
     private static final int    MA20_PERIOD             = 20;

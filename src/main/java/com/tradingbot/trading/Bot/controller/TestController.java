@@ -17,10 +17,13 @@ import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MockMarketDataProvider;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
 import com.tradingbot.trading.Bot.position.PositionManager;
+import com.tradingbot.trading.Bot.strategy.MeanReversionStrategy;
+import com.tradingbot.trading.Bot.strategy.NoTradeStrategy;
 import com.tradingbot.trading.Bot.strategy.PerfectBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
 import com.tradingbot.trading.Bot.strategy.SimplifiedBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
+import com.tradingbot.trading.Bot.strategy.VolatilityBreakoutStrategy;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,6 +37,8 @@ public class TestController {
     private final RsiStrategyService rsiStrategyService;
     private final PerfectBreakoutStrategy perfectBreakoutStrategy;
     private final SimplifiedBreakoutStrategy simplifiedBreakoutStrategy;
+    private final MeanReversionStrategy meanReversionStrategy;
+    private final VolatilityBreakoutStrategy volatilityBreakoutStrategy;
     private final TradeDecisionService tradeDecisionService;
     private final PositionManager positionManager;
     private final BacktestEngine backtestEngine;
@@ -47,6 +52,8 @@ public class TestController {
                           RsiStrategyService rsiStrategyService,
                           PerfectBreakoutStrategy perfectBreakoutStrategy,
                           SimplifiedBreakoutStrategy simplifiedBreakoutStrategy,
+                          MeanReversionStrategy meanReversionStrategy,
+                          VolatilityBreakoutStrategy volatilityBreakoutStrategy,
                           TradeDecisionService tradeDecisionService,
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
@@ -56,18 +63,20 @@ public class TestController {
                           PortfolioBacktestEngine portfolioBacktestEngine,
                           BacktestValidationService backtestValidationService) {
 
-        this.marketDataService          = marketDataService;
-        this.rsiStrategyService         = rsiStrategyService;
-        this.perfectBreakoutStrategy    = perfectBreakoutStrategy;
-        this.simplifiedBreakoutStrategy = simplifiedBreakoutStrategy;
-        this.tradeDecisionService       = tradeDecisionService;
-        this.positionManager            = positionManager;
-        this.backtestEngine             = backtestEngine;
-        this.brokerAdapter              = brokerAdapter;
-        this.brokerStateService         = brokerStateService;
-        this.marketRegimeService        = marketRegimeService;
-        this.portfolioBacktestEngine    = portfolioBacktestEngine;
-        this.backtestValidationService  = backtestValidationService;
+        this.marketDataService           = marketDataService;
+        this.rsiStrategyService          = rsiStrategyService;
+        this.perfectBreakoutStrategy     = perfectBreakoutStrategy;
+        this.simplifiedBreakoutStrategy  = simplifiedBreakoutStrategy;
+        this.meanReversionStrategy       = meanReversionStrategy;
+        this.volatilityBreakoutStrategy  = volatilityBreakoutStrategy;
+        this.tradeDecisionService        = tradeDecisionService;
+        this.positionManager             = positionManager;
+        this.backtestEngine              = backtestEngine;
+        this.brokerAdapter               = brokerAdapter;
+        this.brokerStateService          = brokerStateService;
+        this.marketRegimeService         = marketRegimeService;
+        this.portfolioBacktestEngine     = portfolioBacktestEngine;
+        this.backtestValidationService   = backtestValidationService;
     }
 
     /*
@@ -622,6 +631,134 @@ public class TestController {
         response.put("startCapital",  result.getStartingCapital());
         response.put("endCapital",    result.getEndingCapital());
         response.put("maxDrawdown",   result.getMaxDrawdown());
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ MOCK DATA: Backtest using SIDEWAYS_VOLATILE scenario
+    Uses MeanReversionStrategy — the correct strategy for
+    ranging/sideways markets. Expected: 55-65% WR.
+    ======================================================
+     */
+    @GetMapping("/backtest/mock/sideways")
+    public Map<String, Object> backtestMockSideways() {
+        MarketDataProvider provider = MockMarketDataProvider.forScenario(
+                marketDataService,
+                MockMarketDataService.MarketScenario.SIDEWAYS_VOLATILE
+        );
+
+        List<Candle> candles = provider.getCandles("AAPL", 1000);
+        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, meanReversionStrategy);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("provider",      provider.getProviderName());
+        response.put("strategy",      meanReversionStrategy.getName());
+        response.put("regime",        "SIDEWAYS");
+        response.put("totalCandles",  candles.size());
+        response.put("totalTrades",   result.getTotalTrades());
+        response.put("winRate",       result.getWinRate());
+        response.put("totalPnL",      result.getTotalPnL());
+        response.put("startCapital",  result.getStartingCapital());
+        response.put("endCapital",    result.getEndingCapital());
+        response.put("maxDrawdown",   result.getMaxDrawdown());
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ MOCK DATA: Backtest using SIDEWAYS_VOLATILE scenario
+    Uses VolatilityBreakoutStrategy — the correct strategy
+    for high-volatility directional spikes. Expected: 60-70% WR.
+    ======================================================
+     */
+    @GetMapping("/backtest/mock/volatile")
+    public Map<String, Object> backtestMockVolatile() {
+        MarketDataProvider provider = MockMarketDataProvider.forScenario(
+                marketDataService,
+                MockMarketDataService.MarketScenario.SIDEWAYS_VOLATILE
+        );
+
+        List<Candle> candles = provider.getCandles("AAPL", 1000);
+        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, volatilityBreakoutStrategy);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("provider",      provider.getProviderName());
+        response.put("strategy",      volatilityBreakoutStrategy.getName());
+        response.put("regime",        "HIGH_VOLATILITY");
+        response.put("totalCandles",  candles.size());
+        response.put("totalTrades",   result.getTotalTrades());
+        response.put("winRate",       result.getWinRate());
+        response.put("totalPnL",      result.getTotalPnL());
+        response.put("startCapital",  result.getStartingCapital());
+        response.put("endCapital",    result.getEndingCapital());
+        response.put("maxDrawdown",   result.getMaxDrawdown());
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ MOCK DATA: Backtest on STRONG_DOWNTREND data.
+    Uses NoTradeStrategy — no trades expected (preserve capital).
+    Expected: 0 trades, 0 loss.
+    ======================================================
+     */
+    @GetMapping("/backtest/mock/downtrend")
+    public Map<String, Object> backtestMockDowntrend() {
+        MarketDataProvider provider = MockMarketDataProvider.forScenario(
+                marketDataService,
+                MockMarketDataService.MarketScenario.STRONG_DOWNTREND
+        );
+
+        List<Candle> candles = provider.getCandles("AAPL", 1000);
+        NoTradeStrategy noTradeStrategy = new NoTradeStrategy();
+        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, noTradeStrategy);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("provider",      provider.getProviderName());
+        response.put("strategy",      noTradeStrategy.getName());
+        response.put("regime",        "STRONG_DOWNTREND");
+        response.put("totalCandles",  candles.size());
+        response.put("totalTrades",   result.getTotalTrades());
+        response.put("winRate",       result.getWinRate());
+        response.put("totalPnL",      result.getTotalPnL());
+        response.put("startCapital",  result.getStartingCapital());
+        response.put("endCapital",    result.getEndingCapital());
+        response.put("maxDrawdown",   result.getMaxDrawdown());
+        response.put("note",          "Capital preserved — no trades in downtrend");
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ MOCK DATA: Backtest on CRASH data.
+    Uses NoTradeStrategy — no trades expected (emergency halt).
+    Expected: 0 trades, 0 loss.
+    ======================================================
+     */
+    @GetMapping("/backtest/mock/crash")
+    public Map<String, Object> backtestMockCrash() {
+        MarketDataProvider provider = MockMarketDataProvider.forScenario(
+                marketDataService,
+                MockMarketDataService.MarketScenario.CRASH
+        );
+
+        List<Candle> candles = provider.getCandles("AAPL", 1000);
+        NoTradeStrategy noTradeStrategy = new NoTradeStrategy();
+        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, noTradeStrategy);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("provider",      provider.getProviderName());
+        response.put("strategy",      noTradeStrategy.getName());
+        response.put("regime",        "CRASH");
+        response.put("totalCandles",  candles.size());
+        response.put("totalTrades",   result.getTotalTrades());
+        response.put("winRate",       result.getWinRate());
+        response.put("totalPnL",      result.getTotalPnL());
+        response.put("startCapital",  result.getStartingCapital());
+        response.put("endCapital",    result.getEndingCapital());
+        response.put("maxDrawdown",   result.getMaxDrawdown());
+        response.put("note",          "Capital preserved — no trades in crash");
         return response;
     }
 
