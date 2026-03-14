@@ -62,6 +62,9 @@ public class BacktestEngine {
                                       List<Candle> candles,
                                       Strategy strategy) {
 
+        // Reset regime-persistence state so previous runs do not contaminate this one.
+        regimeService.reset();
+
         BigDecimal capital   = STARTING_CAPITAL;
         BigDecimal peakEquity = STARTING_CAPITAL;
         BigDecimal maxDrawdown = BigDecimal.ZERO;

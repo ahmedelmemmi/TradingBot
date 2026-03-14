@@ -22,9 +22,26 @@ public class MarketRegimeService {
     /** Number of consecutive bars a non-crash regime must hold before confirming. */
     private static final int REGIME_PERSISTENCE_COUNT = 5;
 
+    /** MA20/MA50 slope must exceed this value (2%) for STRONG_UPTREND classification. */
+    public static final double STRONG_UPTREND_SLOPE_THRESHOLD = 0.02;
+
+    /** Average bar range (High-Low)/Close must exceed this (2.5%) for HIGH_VOLATILITY. */
+    public static final double HIGH_VOLATILITY_RANGE_THRESHOLD = 0.025;
+
     private MarketRegime lastConfirmedRegime = MarketRegime.SIDEWAYS;
     private MarketRegime candidateRegime = MarketRegime.SIDEWAYS;
     private int candidateCount = 0;
+
+    /**
+     * Resets the persistence state so that each backtest run starts from a
+     * clean slate.  Must be called once before iterating over a new candle
+     * series, otherwise state from a previous run contaminates the detection.
+     */
+    public void reset() {
+        lastConfirmedRegime = MarketRegime.SIDEWAYS;
+        candidateRegime     = MarketRegime.SIDEWAYS;
+        candidateCount      = 0;
+    }
 
     public MarketRegime detect(List<Candle> candles) {
 
@@ -58,16 +75,16 @@ public class MarketRegimeService {
             return MarketRegime.CRASH;
         }
 
-        if (volatility.compareTo(BigDecimal.valueOf(0.025)) > 0) {
+        if (volatility.compareTo(BigDecimal.valueOf(HIGH_VOLATILITY_RANGE_THRESHOLD)) > 0) {
             return MarketRegime.HIGH_VOLATILITY;
         }
 
-        if (slope.compareTo(BigDecimal.valueOf(0.02)) > 0 &&
+        if (slope.compareTo(BigDecimal.valueOf(STRONG_UPTREND_SLOPE_THRESHOLD)) > 0 &&
                 momentum.compareTo(BigDecimal.ZERO) > 0) {
             return MarketRegime.STRONG_UPTREND;
         }
 
-        if (slope.compareTo(BigDecimal.valueOf(-0.02)) < 0 &&
+        if (slope.compareTo(BigDecimal.valueOf(-STRONG_UPTREND_SLOPE_THRESHOLD)) < 0 &&
                 momentum.compareTo(BigDecimal.ZERO) < 0) {
             return MarketRegime.STRONG_DOWNTREND;
         }
