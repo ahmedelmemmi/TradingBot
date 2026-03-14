@@ -2,6 +2,7 @@ package com.tradingbot.trading.Bot.market;
 
 import com.tradingbot.trading.Bot.domain.Candle;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -21,6 +22,21 @@ public interface MarketDataProvider {
      * @return list of candles, ordered oldest-first
      */
     List<Candle> getCandles(String symbol, int count);
+
+    /**
+     * Returns a list of candles for the given symbol within a date range.
+     * Implementations that do not support date-range queries should override
+     * this method; the default falls back to {@link #getCandles(String, int)}.
+     *
+     * @param symbol the ticker symbol (e.g. "SPY")
+     * @param count  approximate number of candles (hint; implementations may ignore)
+     * @param from   start of the date range (inclusive)
+     * @param to     end of the date range (inclusive)
+     * @return list of candles, ordered oldest-first
+     */
+    default List<Candle> getCandles(String symbol, int count, LocalDateTime from, LocalDateTime to) {
+        return getCandles(symbol, count);
+    }
 
     /**
      * Returns a human-readable name for this provider (used in API responses).
