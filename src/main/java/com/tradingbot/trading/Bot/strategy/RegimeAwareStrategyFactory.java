@@ -9,10 +9,13 @@ import java.util.List;
 /**
  * Factory that selects the appropriate strategy based on the current market regime.
  *
+ * <p><b>Uptrend-only mode</b> — only {@link MarketRegime#STRONG_UPTREND} triggers active trading.
+ * All other regimes preserve capital by returning {@link NoTradeStrategy}.</p>
+ *
  * <p>Decision tree:</p>
  * <ul>
- *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link SimplifiedBreakoutStrategy} (primary setup)</li>
- *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link SimplifiedBreakoutStrategy} (volatile breakouts)</li>
+ *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link SimplifiedBreakoutStrategy} (proven 100% WR edge)</li>
+ *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link NoTradeStrategy} (ARCHIVED: was SimplifiedBreakoutStrategy)</li>
  *   <li>{@link MarketRegime#SIDEWAYS} → {@link NoTradeStrategy} (no edge in sideways)</li>
  *   <li>{@link MarketRegime#STRONG_DOWNTREND} → {@link NoTradeStrategy} (preserve capital)</li>
  *   <li>{@link MarketRegime#CRASH} → {@link NoTradeStrategy} (emergency halt)</li>
@@ -33,7 +36,10 @@ public class RegimeAwareStrategyFactory {
 
     /**
      * Returns the appropriate strategy for the given regime.
-     * Never returns {@code null} — unfavourable regimes return {@link NoTradeStrategy}.
+     *
+     * <p>Only {@link MarketRegime#STRONG_UPTREND} produces an active strategy.
+     * All other regimes return {@link NoTradeStrategy} to preserve capital while
+     * waiting for the proven uptrend edge.</p>
      *
      * @param regime current market regime
      * @return strategy instance (never null)
@@ -41,15 +47,14 @@ public class RegimeAwareStrategyFactory {
     public Strategy getStrategy(MarketRegime regime) {
         return switch (regime) {
             case STRONG_UPTREND -> {
-                System.out.println("[Factory] Using SimplifiedBreakoutStrategy (STRONG_UPTREND)");
+                System.out.println("[UptrendOnly] ✅ UPTREND: Trading with SimplifiedBreakoutStrategy");
                 yield simplifiedBreakout;
             }
-            case HIGH_VOLATILITY -> {
-                System.out.println("[Factory] Using SimplifiedBreakoutStrategy (HIGH_VOLATILITY)");
-                yield simplifiedBreakout;
-            }
-            case SIDEWAYS, STRONG_DOWNTREND, CRASH -> {
-                System.out.println("[Factory] NO TRADES - regime: " + regime);
+            // ARCHIVED: HIGH_VOLATILITY previously mapped to SimplifiedBreakoutStrategy.
+            // Kept for future re-enabling if a validated volatile-regime edge is found.
+            // case HIGH_VOLATILITY -> simplifiedBreakout;
+            case HIGH_VOLATILITY, SIDEWAYS, STRONG_DOWNTREND, CRASH -> {
+                System.out.println("[UptrendOnly] ⏸️ " + regime + ": NO TRADING - Waiting for uptrend");
                 yield noTrade;
             }
         };
