@@ -15,6 +15,7 @@ import com.tradingbot.trading.Bot.execution.TradeDecisionService;
 import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
 import com.tradingbot.trading.Bot.position.PositionManager;
+import com.tradingbot.trading.Bot.strategy.PerfectBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,6 +28,7 @@ import java.util.*;
 public class TestController {
     private final MockMarketDataService marketDataService;
     private final RsiStrategyService rsiStrategyService;
+    private final PerfectBreakoutStrategy perfectBreakoutStrategy;
     private final TradeDecisionService tradeDecisionService;
     private final PositionManager positionManager;
     private final BacktestEngine backtestEngine;
@@ -38,6 +40,7 @@ public class TestController {
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
+                          PerfectBreakoutStrategy perfectBreakoutStrategy,
                           TradeDecisionService tradeDecisionService,
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
@@ -49,6 +52,7 @@ public class TestController {
 
         this.marketDataService         = marketDataService;
         this.rsiStrategyService        = rsiStrategyService;
+        this.perfectBreakoutStrategy   = perfectBreakoutStrategy;
         this.tradeDecisionService      = tradeDecisionService;
         this.positionManager           = positionManager;
         this.backtestEngine            = backtestEngine;
@@ -91,7 +95,7 @@ public class TestController {
 
     /*
      -------------------------------------------------------
-     NORMAL BACKTEST
+     NORMAL BACKTEST  (PerfectBreakoutStrategy)
      -------------------------------------------------------
      */
     @GetMapping("/backtest/random")
@@ -107,13 +111,13 @@ public class TestController {
         return backtestEngine.runStrategy(
                 "AAPL",
                 candles,
-                rsiStrategyService
+                perfectBreakoutStrategy
         );
     }
 
     /*
      -------------------------------------------------------
-     UPTREND TEST
+     UPTREND TEST  (PerfectBreakoutStrategy)
      -------------------------------------------------------
      */
     @GetMapping("/backtest/uptrend")
@@ -129,7 +133,7 @@ public class TestController {
         return backtestEngine.runStrategy(
                 "AAPL",
                 candles,
-                rsiStrategyService
+                perfectBreakoutStrategy
         );
     }
 
@@ -151,7 +155,7 @@ public class TestController {
         return backtestEngine.runStrategy(
                 "AAPL",
                 candles,
-                rsiStrategyService
+                perfectBreakoutStrategy
         );
     }
 
@@ -173,7 +177,7 @@ public class TestController {
         return backtestEngine.runStrategy(
                 "AAPL",
                 candles,
-                rsiStrategyService
+                perfectBreakoutStrategy
         );
     }
 
@@ -207,7 +211,7 @@ public class TestController {
                     backtestEngine.runStrategy(
                             symbol,
                             candles,
-                            rsiStrategyService
+                            perfectBreakoutStrategy
                     );
 
             results.put(symbol, result);
@@ -324,7 +328,7 @@ public class TestController {
 
         return portfolioBacktestEngine.runPortfolio(
                 market,
-                rsiStrategyService
+                perfectBreakoutStrategy
         );
     }
 
@@ -346,7 +350,7 @@ public class TestController {
                 );
 
         BacktestResult result = backtestEngine.runStrategy(
-                "AAPL", candles, rsiStrategyService);
+                "AAPL", candles, perfectBreakoutStrategy);
 
         BacktestValidationResult validation =
                 backtestValidationService.validate(
@@ -394,7 +398,7 @@ public class TestController {
                 );
 
         BacktestResult result = backtestEngine.runStrategy(
-                "AAPL", candles, rsiStrategyService);
+                "AAPL", candles, perfectBreakoutStrategy);
 
         return result.getTradeLogCsv();
     }
@@ -403,10 +407,10 @@ public class TestController {
     ======================================================
     ✅ HYBRID REGIME-BASED STRATEGY BACKTEST
     Runs a full backtest using the RegimeAwareStrategyFactory.
-    Automatically switches strategy per market regime:
-      STRONG_UPTREND   → TrendFollowingStrategy
-      SIDEWAYS         → MeanReversionStrategy
-      HIGH_VOLATILITY  → VolatilityBreakoutStrategy
+    PerfectBreakoutStrategy is used in all active regimes:
+      STRONG_UPTREND   → PerfectBreakoutStrategy
+      SIDEWAYS         → PerfectBreakoutStrategy (watching for breakout)
+      HIGH_VOLATILITY  → No trading (capital preserved)
       DOWNTREND/CRASH  → No trading (capital preserved)
     Returns per-strategy trade counts and aggregate metrics.
     ======================================================

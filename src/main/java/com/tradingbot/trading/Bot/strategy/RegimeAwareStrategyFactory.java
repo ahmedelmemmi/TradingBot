@@ -9,21 +9,29 @@ import java.util.List;
 /**
  * Factory that selects the appropriate strategy based on the current market regime.
  *
- * <p>Decision tree:</p>
+ * <p>Decision tree (quality-over-quantity, targeting 80% win rate):</p>
  * <ul>
- *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link SimpleTrendFollowingStrategy}</li>
- *   <li>{@link MarketRegime#SIDEWAYS} → {@link StrictMeanReversionStrategy}</li>
+ *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link PerfectBreakoutStrategy} (primary setup)</li>
+ *   <li>{@link MarketRegime#SIDEWAYS} → {@link PerfectBreakoutStrategy} (consolidation = sideways)</li>
  *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link NoTradeStrategy} (preserve capital)</li>
  *   <li>{@link MarketRegime#STRONG_DOWNTREND} → {@link NoTradeStrategy} (preserve capital)</li>
  *   <li>{@link MarketRegime#CRASH} → {@link NoTradeStrategy} (emergency halt)</li>
  * </ul>
+ *
+ * <p>Note: {@link PerfectBreakoutStrategy} performs its own internal regime check and will only
+ * emit a BUY signal when the regime is {@link MarketRegime#STRONG_UPTREND}. Routing SIDEWAYS
+ * regimes here allows the strategy to evaluate whether a consolidation breakout is forming while
+ * still applying its strict internal filters.</p>
  */
 @Service
 public class RegimeAwareStrategyFactory {
 
-    private final SimpleTrendFollowingStrategy simpleTrendFollowing = new SimpleTrendFollowingStrategy();
-    private final StrictMeanReversionStrategy  strictMeanReversion  = new StrictMeanReversionStrategy();
-    private final NoTradeStrategy              noTrade              = new NoTradeStrategy();
+    private final PerfectBreakoutStrategy perfectBreakout;
+    private final NoTradeStrategy         noTrade = new NoTradeStrategy();
+
+    public RegimeAwareStrategyFactory(PerfectBreakoutStrategy perfectBreakout) {
+        this.perfectBreakout = perfectBreakout;
+    }
 
     /**
      * Returns the appropriate strategy for the given regime.
@@ -35,12 +43,12 @@ public class RegimeAwareStrategyFactory {
     public Strategy getStrategy(MarketRegime regime) {
         return switch (regime) {
             case STRONG_UPTREND -> {
-                System.out.println("[Factory] Selecting SimpleTrendFollowingStrategy (STRONG_UPTREND)");
-                yield simpleTrendFollowing;
+                System.out.println("[Factory] Selecting PerfectBreakoutStrategy (STRONG_UPTREND)");
+                yield perfectBreakout;
             }
             case SIDEWAYS -> {
-                System.out.println("[Factory] Selecting StrictMeanReversionStrategy (SIDEWAYS)");
-                yield strictMeanReversion;
+                System.out.println("[Factory] Selecting PerfectBreakoutStrategy (SIDEWAYS - watching for breakout)");
+                yield perfectBreakout;
             }
             case STRONG_DOWNTREND, CRASH, HIGH_VOLATILITY -> {
                 System.out.println("[Factory] Selecting NoTradeStrategy (" + regime + ") - preserving capital");
@@ -57,7 +65,6 @@ public class RegimeAwareStrategyFactory {
         return getStrategy(regime).evaluate(candles);
     }
 
-    public SimpleTrendFollowingStrategy getSimpleTrendFollowingStrategy() { return simpleTrendFollowing; }
-    public StrictMeanReversionStrategy getStrictMeanReversionStrategy()   { return strictMeanReversion; }
-    public NoTradeStrategy getNoTradeStrategy()                           { return noTrade; }
+    public PerfectBreakoutStrategy getPerfectBreakoutStrategy() { return perfectBreakout; }
+    public NoTradeStrategy getNoTradeStrategy()                 { return noTrade; }
 }
