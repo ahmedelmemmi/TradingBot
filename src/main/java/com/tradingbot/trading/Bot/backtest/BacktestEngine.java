@@ -239,7 +239,13 @@ public class BacktestEngine {
                 totalTrades,
                 winningTrades,
                 losingTrades,
-                totalPnL
+                totalPnL,
+                winRate,
+                profitFactor,
+                avgWin,
+                avgLoss,
+                expectancy,
+                maxDrawdown
         );
     }
 }

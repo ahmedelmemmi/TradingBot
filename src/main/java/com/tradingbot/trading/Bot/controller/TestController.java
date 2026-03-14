@@ -11,7 +11,10 @@ import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
 import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
+import com.tradingbot.trading.Bot.persistence.TradeEntity;
+import com.tradingbot.trading.Bot.persistence.TradeRepository;
 import com.tradingbot.trading.Bot.position.PositionManager;
+import com.tradingbot.trading.Bot.strategy.MacdStrategyService;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,6 +26,7 @@ import java.util.*;
 public class TestController {
     private final MockMarketDataService marketDataService;
     private final RsiStrategyService rsiStrategyService;
+    private final MacdStrategyService macdStrategyService;
     private final TradeDecisionService tradeDecisionService;
     private final PositionManager positionManager;
     private final BacktestEngine backtestEngine;
@@ -30,17 +34,23 @@ public class TestController {
     private final BrokerStateService brokerStateService;
     private final MarketRegimeService marketRegimeService;
     private final PortfolioBacktestEngine portfolioBacktestEngine;
+    private final TradeRepository tradeRepository;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
+                          MacdStrategyService macdStrategyService,
                           TradeDecisionService tradeDecisionService,
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
                           IBKRPaperBrokerAdapter brokerAdapter,
-                          BrokerStateService brokerStateService, MarketRegimeService marketRegimeService, PortfolioBacktestEngine portfolioBacktestEngine) {
+                          BrokerStateService brokerStateService,
+                          MarketRegimeService marketRegimeService,
+                          PortfolioBacktestEngine portfolioBacktestEngine,
+                          TradeRepository tradeRepository) {
 
         this.marketDataService = marketDataService;
         this.rsiStrategyService = rsiStrategyService;
+        this.macdStrategyService = macdStrategyService;
         this.tradeDecisionService = tradeDecisionService;
         this.positionManager = positionManager;
         this.backtestEngine = backtestEngine;
@@ -48,6 +58,7 @@ public class TestController {
         this.brokerStateService = brokerStateService;
         this.marketRegimeService = marketRegimeService;
         this.portfolioBacktestEngine = portfolioBacktestEngine;
+        this.tradeRepository = tradeRepository;
     }
 
     /*
@@ -319,4 +330,72 @@ public class TestController {
         );
     }
 
+    /*
+    ======================================================
+    ✅ MACD STRATEGY BACKTESTS
+    ======================================================
+     */
+
+    @GetMapping("/backtest/macd/random")
+    public BacktestResult backtestMacdRandom() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1000,
+                        MockMarketDataService.MarketScenario.RANDOM
+                );
+
+        return backtestEngine.runStrategy("AAPL", candles, macdStrategyService);
+    }
+
+    @GetMapping("/backtest/macd/uptrend")
+    public BacktestResult backtestMacdUptrend() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1000,
+                        MockMarketDataService.MarketScenario.STRONG_UPTREND
+                );
+
+        return backtestEngine.runStrategy("AAPL", candles, macdStrategyService);
+    }
+
+    @GetMapping("/backtest/macd/crash")
+    public BacktestResult backtestMacdCrash() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1500,
+                        MockMarketDataService.MarketScenario.CRASH
+                );
+
+        return backtestEngine.runStrategy("AAPL", candles, macdStrategyService);
+    }
+
+    /*
+    ======================================================
+    ✅ TRADE HISTORY
+    ======================================================
+     */
+
+    /**
+     * Returns all trades persisted in the H2 database.
+     */
+    @GetMapping("/trades")
+    public List<TradeEntity> getAllTrades() {
+        return tradeRepository.findAll();
+    }
+
+    /**
+     * Returns only currently open trades from the H2 database.
+     */
+    @GetMapping("/trades/open")
+    public List<TradeEntity> getOpenTrades() {
+        return tradeRepository.findByOpenTrue();
+    }
+
 }
+

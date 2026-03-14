@@ -335,9 +335,6 @@ public class PortfolioBacktestEngine {
 
             List<Candle> series = market.get(symbol);
 
-            BigDecimal last =
-                    series.get(series.size() - 1).getClose();
-
             capital = forceClose(symbol, series, capital);
         }
 
