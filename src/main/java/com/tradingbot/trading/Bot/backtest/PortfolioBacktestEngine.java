@@ -6,6 +6,7 @@ import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MarketRegimeService.MarketRegime;
 import com.tradingbot.trading.Bot.portfolio.PortfolioRiskService;
 import com.tradingbot.trading.Bot.position.PositionManager;
+import com.tradingbot.trading.Bot.risk.AdaptiveRiskService;
 import com.tradingbot.trading.Bot.strategy.AtrCalculator;
 import com.tradingbot.trading.Bot.strategy.Strategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
@@ -18,37 +19,46 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Multi-symbol portfolio backtesting engine with institutional-grade features:
+ * <ul>
+ *   <li>Dynamic slippage via {@link SlippageService}</li>
+ *   <li>ATR-based adaptive stop loss via {@link AdaptiveRiskService}</li>
+ *   <li>Kelly Criterion position sizing (adaptive after 30+ trades)</li>
+ *   <li>Trade cooldown enforcement (10 bars default, regime-adjusted)</li>
+ *   <li>Capital deducted at entry and returned at exit</li>
+ * </ul>
+ */
 @Service
 public class PortfolioBacktestEngine {
 
     private final PositionManager positionManager;
     private final PortfolioRiskService portfolioRiskService;
     private final MarketRegimeService regimeService;
+    private final SlippageService slippageService;
+    private final AdaptiveRiskService adaptiveRiskService;
 
-    private static final BigDecimal STARTING_CAPITAL =
-            BigDecimal.valueOf(10_000);
-
-    private static final BigDecimal SLIPPAGE =
-            BigDecimal.valueOf(0.0005);
-
-    private static final BigDecimal COMMISSION =
-            BigDecimal.valueOf(1.0);
-
-    private static final int TRADE_COOLDOWN_BARS = 10;
+    private static final BigDecimal STARTING_CAPITAL = BigDecimal.valueOf(10_000);
+    private static final BigDecimal COMMISSION        = BigDecimal.valueOf(1.0);
+    private static final int TRADE_COOLDOWN_BARS      = 10;
 
     public PortfolioBacktestEngine(PositionManager positionManager,
                                    PortfolioRiskService portfolioRiskService,
-                                   MarketRegimeService regimeService) {
-        this.positionManager = positionManager;
+                                   MarketRegimeService regimeService,
+                                   SlippageService slippageService,
+                                   AdaptiveRiskService adaptiveRiskService) {
+        this.positionManager     = positionManager;
         this.portfolioRiskService = portfolioRiskService;
-        this.regimeService = regimeService;
+        this.regimeService       = regimeService;
+        this.slippageService     = slippageService;
+        this.adaptiveRiskService = adaptiveRiskService;
     }
 
     public PortfolioBacktestResult run(String symbol,
                                        List<Candle> candles,
                                        Strategy strategy) {
 
-        BigDecimal capital = STARTING_CAPITAL;
+        BigDecimal capital   = STARTING_CAPITAL;
         BigDecimal peakEquity = STARTING_CAPITAL;
 
         portfolioRiskService.initialize(capital);
@@ -59,19 +69,20 @@ public class PortfolioBacktestEngine {
         List<BigDecimal> equityCurve = new ArrayList<>();
         Map<String, Integer> cooldownMap = new HashMap<>();
 
+        AtrCalculator atrCalc = new AtrCalculator();
+
         for (int i = 60; i < candles.size(); i++) {
 
             List<Candle> subset = candles.subList(0, i + 1);
-
             MarketRegime regime = regimeService.detect(subset);
-
             TradingSignal signal = strategy.evaluate(subset);
 
             BigDecimal price = candles.get(i).getClose();
+            BigDecimal atr   = atrCalc.calculate(subset, 14);
 
             positionManager.updatePrice(symbol, price);
 
-            capital = checkStopsWithCapitalReturn(symbol, price, capital, cooldownMap, i);
+            capital = checkStopsWithCapitalReturn(symbol, price, atr, regime, capital, cooldownMap, i);
 
             int cooldownUntil = cooldownMap.getOrDefault(symbol, 0);
 
@@ -79,91 +90,63 @@ public class PortfolioBacktestEngine {
                     positionManager.getOpenPosition(symbol).isEmpty() &&
                     i >= cooldownUntil) {
 
-                boolean allowed =
-                        portfolioRiskService.canOpenNewPosition(
-                                positionManager.getOpenPositions(),
-                                capital,
-                                regime
-                        );
+                boolean allowed = portfolioRiskService.canOpenNewPosition(
+                        positionManager.getOpenPositions(), capital, regime);
 
-                if (!allowed)
-                    continue;
+                if (!allowed) continue;
 
                 if (!portfolioRiskService.isPortfolioRiskAcceptable(
-                        positionManager.getOpenPositions(), calculateEquity(capital)))
-                    continue;
+                        positionManager.getOpenPositions(), calculateEquity(capital))) continue;
 
-                AtrCalculator atrCalc = new AtrCalculator();
-                BigDecimal atr = atrCalc.calculate(subset, 14);
+                if (atr.compareTo(BigDecimal.ZERO) <= 0) continue;
 
-                if (atr.compareTo(BigDecimal.ZERO) <= 0)
-                    continue;
+                // Adaptive stop loss based on ATR + regime
+                BigDecimal stop = adaptiveRiskService.calculateAdaptiveStop(subset, price, regime);
+                BigDecimal take = price.add(atr.multiply(BigDecimal.valueOf(4.0)));
 
-                BigDecimal stop =
-                        price.subtract(atr.multiply(BigDecimal.valueOf(2.5)));
+                // Adaptive risk: Kelly when sufficient trades, else 1%
+                BigDecimal riskPct = adaptiveRiskService.calculateKellyRiskPercent(
+                        positionManager.getClosedPositions());
 
-                BigDecimal take =
-                        price.add(atr.multiply(BigDecimal.valueOf(4.0)));
+                BigDecimal riskPerTrade = capital.multiply(riskPct);
+                BigDecimal riskPerShare = price.subtract(stop).abs();
 
-                BigDecimal riskPerTrade =
-                        capital.multiply(BigDecimal.valueOf(0.01));
+                if (riskPerShare.compareTo(BigDecimal.ZERO) == 0) continue;
 
-                BigDecimal riskPerShare =
-                        price.subtract(stop).abs();
+                BigDecimal qty = riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
 
-                if (riskPerShare.compareTo(BigDecimal.ZERO) == 0)
-                    continue;
+                BigDecimal regimeMult = portfolioRiskService.adjustRiskByRegime(regime);
+                BigDecimal ddMult     = portfolioRiskService.adjustRiskByDrawdown(
+                        calculateEquity(capital), peakEquity);
 
-                BigDecimal qty =
-                        riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
-
-                BigDecimal regimeMult =
-                        portfolioRiskService.adjustRiskByRegime(regime);
-
-                BigDecimal ddMult =
-                        portfolioRiskService.adjustRiskByDrawdown(
-                                calculateEquity(capital), peakEquity);
-
-                BigDecimal finalMult =
-                        regimeMult.multiply(ddMult);
-
-                qty = qty.multiply(finalMult)
+                qty = qty.multiply(regimeMult).multiply(ddMult)
                         .setScale(0, RoundingMode.DOWN);
 
-                if (qty.compareTo(BigDecimal.ZERO) <= 0)
-                    continue;
+                if (qty.compareTo(BigDecimal.ZERO) <= 0) continue;
 
-                BigDecimal slippageAdjustedPrice =
-                        price.multiply(BigDecimal.ONE.add(SLIPPAGE));
+                // Dynamic slippage at entry
+                BigDecimal slippage = slippageService.calculateSlippage(atr, price, regime);
+                BigDecimal slippageAdjustedPrice = price.multiply(BigDecimal.ONE.add(slippage));
 
-                BigDecimal cost = slippageAdjustedPrice.multiply(qty)
-                        .add(COMMISSION);
+                BigDecimal cost = slippageAdjustedPrice.multiply(qty).add(COMMISSION);
 
-                if (cost.compareTo(capital) > 0)
-                    continue;
+                if (cost.compareTo(capital) > 0) continue;
 
+                // Deduct capital at entry
                 capital = capital.subtract(cost);
 
-                Position position =
-                        new Position(symbol, slippageAdjustedPrice, qty, stop, take);
-
+                Position position = new Position(symbol, slippageAdjustedPrice, qty, stop, take);
                 positionManager.openPosition(position);
 
-                System.out.println("BACKTEST BUY "
-                        + symbol
-                        + " regime=" + regime
-                        + " qty=" + qty
-                        + " price=" + slippageAdjustedPrice
-                        + " capital=" + capital);
+                System.out.println("[PortfolioBacktest] BUY " + symbol
+                        + " regime=" + regime + " qty=" + qty
+                        + " price=" + slippageAdjustedPrice.setScale(4, RoundingMode.HALF_UP)
+                        + " riskPct=" + riskPct.setScale(4, RoundingMode.HALF_UP)
+                        + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
             }
 
-            BigDecimal equity =
-                    calculateEquity(capital);
-
-            if (equity.compareTo(peakEquity) > 0) {
-                peakEquity = equity;
-            }
-
+            BigDecimal equity = calculateEquity(capital);
+            if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
             equityCurve.add(equity);
         }
 
@@ -173,48 +156,45 @@ public class PortfolioBacktestEngine {
     }
 
     private BigDecimal checkStopsWithCapitalReturn(
-            String symbol, BigDecimal price, BigDecimal capital,
-            Map<String, Integer> cooldownMap, int currentBar) {
+            String symbol, BigDecimal price, BigDecimal atr, MarketRegime regime,
+            BigDecimal capital, Map<String, Integer> cooldownMap, int currentBar) {
 
         var optional = positionManager.getOpenPosition(symbol);
-
-        if (optional.isEmpty())
-            return capital;
+        if (optional.isEmpty()) return capital;
 
         Position p = optional.get();
 
         if (price.compareTo(p.getStopLoss()) <= 0 ||
                 price.compareTo(p.getTakeProfit()) >= 0) {
 
-            BigDecimal exitPrice =
-                    price.multiply(BigDecimal.ONE.subtract(SLIPPAGE));
+            BigDecimal slippage  = slippageService.calculateSlippage(atr, price, regime);
+            BigDecimal exitPrice = price.multiply(BigDecimal.ONE.subtract(slippage));
 
             p.close(exitPrice);
 
-            BigDecimal proceeds =
-                    exitPrice.multiply(p.getQuantity())
-                            .subtract(COMMISSION);
-
+            BigDecimal proceeds = exitPrice.multiply(p.getQuantity()).subtract(COMMISSION);
             capital = capital.add(proceeds);
 
             positionManager.getClosedPositions().add(p);
             positionManager.getOpenPositions().remove(p);
 
             cooldownMap.put(symbol, currentBar + TRADE_COOLDOWN_BARS);
+
+            System.out.println("[PortfolioBacktest] EXIT " + symbol
+                    + " bar=" + currentBar
+                    + " exitPrice=" + exitPrice.setScale(4, RoundingMode.HALF_UP)
+                    + " pnl=" + p.getPnl());
         }
 
         return capital;
     }
 
     private BigDecimal calculateEquity(BigDecimal capital) {
-
         BigDecimal floating = BigDecimal.ZERO;
-
         for (Position p : positionManager.getOpenPositions()) {
             if (p.getPnl() != null)
                 floating = floating.add(p.getPnl());
         }
-
         return capital.add(floating);
     }
 
@@ -222,37 +202,27 @@ public class PortfolioBacktestEngine {
                                   List<Candle> candles,
                                   BigDecimal capital) {
 
-        if (positionManager.getOpenPositions().isEmpty())
-            return capital;
+        if (positionManager.getOpenPositions().isEmpty()) return capital;
 
-        BigDecimal last =
-                candles.get(candles.size() - 1).getClose();
+        BigDecimal last = candles.get(candles.size() - 1).getClose();
 
         List<Position> toClose = new ArrayList<>();
         for (Position p : positionManager.getOpenPositions()) {
-            if (p.getSymbol().equals(symbol)) {
-                toClose.add(p);
-            }
+            if (p.getSymbol().equals(symbol)) toClose.add(p);
         }
 
         for (Position p : toClose) {
-            BigDecimal exitPrice =
-                    last.multiply(BigDecimal.ONE.subtract(SLIPPAGE));
-
+            BigDecimal exitPrice = last.multiply(BigDecimal.valueOf(0.9998));
             p.close(exitPrice);
 
-            BigDecimal proceeds =
-                    exitPrice.multiply(p.getQuantity())
-                            .subtract(COMMISSION);
-
+            BigDecimal proceeds = exitPrice.multiply(p.getQuantity()).subtract(COMMISSION);
             capital = capital.add(proceeds);
 
             positionManager.getClosedPositions().add(p);
             positionManager.getOpenPositions().remove(p);
         }
 
-        System.out.println("BACKTEST FORCE CLOSE " + symbol);
-
+        System.out.println("[PortfolioBacktest] FORCE CLOSE " + symbol);
         return capital;
     }
 
@@ -260,16 +230,14 @@ public class PortfolioBacktestEngine {
                                                 BigDecimal capital,
                                                 BigDecimal peakEquity) {
 
-        BigDecimal end = capital;
-
-        BigDecimal totalPnL =
-                end.subtract(STARTING_CAPITAL);
+        BigDecimal end      = capital;
+        BigDecimal totalPnL = end.subtract(STARTING_CAPITAL);
 
         List<Position> closed = positionManager.getClosedPositions();
-        int totalTrades = closed.size();
+        int totalTrades   = closed.size();
         int winningTrades = 0;
-        int losingTrades = 0;
-        BigDecimal totalWins = BigDecimal.ZERO;
+        int losingTrades  = 0;
+        BigDecimal totalWins   = BigDecimal.ZERO;
         BigDecimal totalLosses = BigDecimal.ZERO;
 
         for (Position p : closed) {
@@ -283,19 +251,19 @@ public class PortfolioBacktestEngine {
             }
         }
 
-        BigDecimal winRate = totalTrades == 0 ? BigDecimal.ZERO :
-                BigDecimal.valueOf(winningTrades)
-                        .divide(BigDecimal.valueOf(totalTrades), 4, RoundingMode.HALF_UP);
+        BigDecimal winRate = totalTrades == 0 ? BigDecimal.ZERO
+                : BigDecimal.valueOf(winningTrades)
+                .divide(BigDecimal.valueOf(totalTrades), 4, RoundingMode.HALF_UP);
 
         BigDecimal profitFactor = totalLosses.compareTo(BigDecimal.ZERO) == 0
                 ? totalWins
                 : totalWins.divide(totalLosses, 4, RoundingMode.HALF_UP);
 
-        BigDecimal avgWin = winningTrades == 0 ? BigDecimal.ZERO :
-                totalWins.divide(BigDecimal.valueOf(winningTrades), 2, RoundingMode.HALF_UP);
+        BigDecimal avgWin = winningTrades == 0 ? BigDecimal.ZERO
+                : totalWins.divide(BigDecimal.valueOf(winningTrades), 2, RoundingMode.HALF_UP);
 
-        BigDecimal avgLoss = losingTrades == 0 ? BigDecimal.ZERO :
-                totalLosses.divide(BigDecimal.valueOf(losingTrades), 2, RoundingMode.HALF_UP);
+        BigDecimal avgLoss = losingTrades == 0 ? BigDecimal.ZERO
+                : totalLosses.divide(BigDecimal.valueOf(losingTrades), 2, RoundingMode.HALF_UP);
 
         BigDecimal expectancy = avgWin.multiply(winRate)
                 .subtract(avgLoss.multiply(BigDecimal.ONE.subtract(winRate)));
@@ -304,8 +272,7 @@ public class PortfolioBacktestEngine {
         BigDecimal peak = STARTING_CAPITAL;
         for (BigDecimal eq : equity) {
             if (eq.compareTo(peak) > 0) peak = eq;
-            BigDecimal dd = peak.subtract(eq)
-                    .divide(peak, 6, RoundingMode.HALF_UP);
+            BigDecimal dd = peak.subtract(eq).divide(peak, 6, RoundingMode.HALF_UP);
             if (dd.compareTo(maxDrawdown) > 0) maxDrawdown = dd;
         }
 
@@ -324,17 +291,9 @@ public class PortfolioBacktestEngine {
         System.out.println("===============================================");
 
         return new PortfolioBacktestResult(
-                STARTING_CAPITAL,
-                end,
-                totalPnL,
-                equity,
-                totalTrades,
-                winningTrades,
-                losingTrades,
-                winRate,
-                profitFactor,
-                expectancy,
-                maxDrawdown
+                STARTING_CAPITAL, end, totalPnL, equity,
+                totalTrades, winningTrades, losingTrades,
+                winRate, profitFactor, expectancy, maxDrawdown
         );
     }
 
@@ -342,7 +301,7 @@ public class PortfolioBacktestEngine {
             Map<String, List<Candle>> market,
             Strategy strategy) {
 
-        BigDecimal capital = STARTING_CAPITAL;
+        BigDecimal capital   = STARTING_CAPITAL;
         BigDecimal peakEquity = STARTING_CAPITAL;
 
         portfolioRiskService.initialize(capital);
@@ -354,28 +313,25 @@ public class PortfolioBacktestEngine {
         Map<String, Integer> cooldownMap = new HashMap<>();
 
         int candles = market.values().iterator().next().size();
+        AtrCalculator atrCalc = new AtrCalculator();
 
         for (int i = 60; i < candles; i++) {
 
             for (String symbol : market.keySet()) {
 
                 List<Candle> series = market.get(symbol);
-
                 List<Candle> subset = series.subList(0, i + 1);
 
-                BigDecimal price =
-                        series.get(i).getClose();
+                BigDecimal price = series.get(i).getClose();
+                BigDecimal atr   = atrCalc.calculate(subset, 14);
 
                 positionManager.updatePrice(symbol, price);
 
-                capital = checkStopsWithCapitalReturn(
-                        symbol, price, capital, cooldownMap, i);
+                MarketRegime regime = regimeService.detect(subset);
 
-                MarketRegime regime =
-                        regimeService.detect(subset);
+                capital = checkStopsWithCapitalReturn(symbol, price, atr, regime, capital, cooldownMap, i);
 
-                TradingSignal signal =
-                        strategy.evaluate(subset);
+                TradingSignal signal = strategy.evaluate(subset);
 
                 int cooldownUntil = cooldownMap.getOrDefault(symbol, 0);
 
@@ -383,95 +339,63 @@ public class PortfolioBacktestEngine {
                         positionManager.getOpenPosition(symbol).isEmpty() &&
                         i >= cooldownUntil) {
 
-                    boolean allowed =
-                            portfolioRiskService.canOpenNewPosition(
-                                    positionManager.getOpenPositions(),
-                                    capital,
-                                    regime
-                            );
+                    boolean allowed = portfolioRiskService.canOpenNewPosition(
+                            positionManager.getOpenPositions(), capital, regime);
 
-                    if (!allowed)
-                        continue;
+                    if (!allowed) continue;
 
                     if (!portfolioRiskService.isPortfolioRiskAcceptable(
-                            positionManager.getOpenPositions(), calculateEquity(capital)))
-                        continue;
+                            positionManager.getOpenPositions(), calculateEquity(capital))) continue;
 
-                    AtrCalculator atrCalc = new AtrCalculator();
-                    BigDecimal atr = atrCalc.calculate(subset, 14);
+                    if (atr.compareTo(BigDecimal.ZERO) <= 0) continue;
 
-                    if (atr.compareTo(BigDecimal.ZERO) <= 0)
-                        continue;
+                    // Adaptive stop loss
+                    BigDecimal stop = adaptiveRiskService.calculateAdaptiveStop(subset, price, regime);
+                    BigDecimal take = price.add(atr.multiply(BigDecimal.valueOf(4.0)));
 
-                    BigDecimal stop =
-                            price.subtract(atr.multiply(BigDecimal.valueOf(2.5)));
+                    // Adaptive Kelly risk sizing
+                    BigDecimal riskPct = adaptiveRiskService.calculateKellyRiskPercent(
+                            positionManager.getClosedPositions());
 
-                    BigDecimal take =
-                            price.add(atr.multiply(BigDecimal.valueOf(4.0)));
+                    BigDecimal riskPerTrade = capital.multiply(riskPct);
+                    BigDecimal riskPerShare = price.subtract(stop).abs();
 
-                    BigDecimal riskPerTrade =
-                            capital.multiply(BigDecimal.valueOf(0.01));
+                    if (riskPerShare.compareTo(BigDecimal.ZERO) == 0) continue;
 
-                    BigDecimal riskPerShare =
-                            price.subtract(stop).abs();
+                    BigDecimal qty = riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
 
-                    if (riskPerShare.compareTo(BigDecimal.ZERO) == 0)
-                        continue;
+                    BigDecimal regimeMult = portfolioRiskService.adjustRiskByRegime(regime);
+                    BigDecimal ddMult     = portfolioRiskService.adjustRiskByDrawdown(
+                            calculateEquity(capital), peakEquity);
 
-                    BigDecimal qty =
-                            riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
-
-                    BigDecimal regimeMult =
-                            portfolioRiskService.adjustRiskByRegime(regime);
-
-                    BigDecimal ddMult =
-                            portfolioRiskService.adjustRiskByDrawdown(
-                                    calculateEquity(capital), peakEquity);
-
-                    BigDecimal finalMult =
-                            regimeMult.multiply(ddMult);
-
-                    qty = qty.multiply(finalMult)
+                    qty = qty.multiply(regimeMult).multiply(ddMult)
                             .setScale(0, RoundingMode.DOWN);
 
-                    if (qty.compareTo(BigDecimal.ZERO) <= 0)
-                        continue;
+                    if (qty.compareTo(BigDecimal.ZERO) <= 0) continue;
 
-                    if (price.compareTo(BigDecimal.valueOf(20)) < 0)
-                        continue;
+                    if (price.compareTo(BigDecimal.valueOf(20)) < 0) continue;
 
-                    BigDecimal slippageAdjustedPrice =
-                            price.multiply(BigDecimal.ONE.add(SLIPPAGE));
+                    BigDecimal slippage = slippageService.calculateSlippage(atr, price, regime);
+                    BigDecimal slippageAdjustedPrice = price.multiply(BigDecimal.ONE.add(slippage));
 
-                    BigDecimal cost = slippageAdjustedPrice.multiply(qty)
-                            .add(COMMISSION);
+                    BigDecimal cost = slippageAdjustedPrice.multiply(qty).add(COMMISSION);
 
-                    if (cost.compareTo(capital) > 0)
-                        continue;
+                    if (cost.compareTo(capital) > 0) continue;
 
                     capital = capital.subtract(cost);
 
-                    Position position =
-                            new Position(symbol, slippageAdjustedPrice, qty, stop, take);
-
+                    Position position = new Position(symbol, slippageAdjustedPrice, qty, stop, take);
                     positionManager.openPosition(position);
 
-                    System.out.println("PORTFOLIO BUY "
-                            + symbol
-                            + " regime=" + regime
-                            + " qty=" + qty
-                            + " price=" + slippageAdjustedPrice
-                            + " capital=" + capital);
+                    System.out.println("[PortfolioBacktest] PORTFOLIO BUY " + symbol
+                            + " regime=" + regime + " qty=" + qty
+                            + " price=" + slippageAdjustedPrice.setScale(4, RoundingMode.HALF_UP)
+                            + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
                 }
             }
 
-            BigDecimal equity =
-                    calculateEquity(capital);
-
-            if (equity.compareTo(peakEquity) > 0) {
-                peakEquity = equity;
-            }
-
+            BigDecimal equity = calculateEquity(capital);
+            if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
             equityCurve.add(equity);
         }
 

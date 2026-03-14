@@ -19,7 +19,8 @@ public class MarketRegimeService {
         CRASH
     }
 
-    private static final int REGIME_PERSISTENCE_COUNT = 3;
+    /** Number of consecutive bars a non-crash regime must hold before confirming. */
+    private static final int REGIME_PERSISTENCE_COUNT = 5;
 
     private MarketRegime lastConfirmedRegime = MarketRegime.SIDEWAYS;
     private MarketRegime candidateRegime = MarketRegime.SIDEWAYS;
@@ -77,6 +78,9 @@ public class MarketRegimeService {
     private MarketRegime applyPersistence(MarketRegime rawRegime) {
 
         if (rawRegime == MarketRegime.CRASH) {
+            if (lastConfirmedRegime != MarketRegime.CRASH) {
+                System.out.println("[MarketRegime] IMMEDIATE transition to CRASH");
+            }
             lastConfirmedRegime = MarketRegime.CRASH;
             candidateRegime = MarketRegime.CRASH;
             candidateCount = REGIME_PERSISTENCE_COUNT;
@@ -91,6 +95,11 @@ public class MarketRegimeService {
         }
 
         if (candidateCount >= REGIME_PERSISTENCE_COUNT) {
+            if (lastConfirmedRegime != candidateRegime) {
+                System.out.println("[MarketRegime] Regime transition: "
+                        + lastConfirmedRegime + " -> " + candidateRegime
+                        + " (confirmed after " + candidateCount + " bars)");
+            }
             lastConfirmedRegime = candidateRegime;
         }
 
