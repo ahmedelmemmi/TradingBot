@@ -61,6 +61,7 @@ public class RsiStrategyService implements Strategy {
     }
 
     private BigDecimal calculateMaSlope(List<Candle> candles, int maPeriod, int lookback) {
+        if (candles.size() <= lookback + maPeriod) return BigDecimal.ZERO;
         BigDecimal currentMa = ma(candles, maPeriod);
         List<Candle> pastCandles = candles.subList(0, candles.size() - lookback);
         BigDecimal pastMa = ma(pastCandles, maPeriod);
