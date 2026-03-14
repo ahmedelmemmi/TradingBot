@@ -36,15 +36,15 @@ public class TrendFollowingStrategy implements Strategy {
     @Override
     public TradingSignal evaluate(List<Candle> candles) {
 
-        if (candles.size() < MA50_PERIOD + BREAKOUT_PERIOD + 1) {
+        if (candles.size() < MA50_PERIOD + 1) {
             return TradingSignal.HOLD;
         }
 
         BigDecimal price = candles.get(candles.size() - 1).getClose();
 
         // Condition 1: Price breaks above the 20-bar highest high
-        // We check candles excluding the current bar (i.e., last BREAKOUT_PERIOD bars before current)
-        BigDecimal highestHigh = highestHigh(candles, BREAKOUT_PERIOD + 1);
+        // We check the prior BREAKOUT_PERIOD bars, excluding the current bar
+        BigDecimal highestHigh = highestHigh(candles, BREAKOUT_PERIOD);
         if (price.compareTo(highestHigh) <= 0) {
             return TradingSignal.HOLD;
         }
@@ -57,7 +57,7 @@ public class TrendFollowingStrategy implements Strategy {
 
         // Condition 3: Volume spike (> 80% of 20-bar average volume)
         long currentVolume = candles.get(candles.size() - 1).getVolume();
-        double avgVolume   = averageVolume(candles, BREAKOUT_PERIOD + 1);
+        double avgVolume   = averageVolume(candles, BREAKOUT_PERIOD);
         if (currentVolume < avgVolume * VOLUME_SPIKE_PCT) {
             return TradingSignal.HOLD;
         }
@@ -75,7 +75,7 @@ public class TrendFollowingStrategy implements Strategy {
     }
 
     /**
-     * Returns the highest high over the last {@code period} candles,
+     * Returns the highest high over the prior {@code period} candles,
      * excluding the current (last) candle.
      */
     private BigDecimal highestHigh(List<Candle> candles, int period) {

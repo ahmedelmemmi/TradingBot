@@ -39,7 +39,7 @@ public class VolatilityBreakoutStrategy implements Strategy {
     @Override
     public TradingSignal evaluate(List<Candle> candles) {
 
-        if (candles.size() < VOLUME_PERIOD + BREAKOUT_PERIOD + 2) {
+        if (candles.size() < Math.max(VOLUME_PERIOD, 14) + 1) {
             return TradingSignal.HOLD;
         }
 
@@ -54,9 +54,9 @@ public class VolatilityBreakoutStrategy implements Strategy {
             return TradingSignal.HOLD;
         }
 
-        // Condition 2: Price breaks 5-bar high or 5-bar low
-        BigDecimal fiveBarHigh = highestHigh(candles, BREAKOUT_PERIOD + 1);
-        BigDecimal fiveBarLow  = lowestLow(candles, BREAKOUT_PERIOD + 1);
+        // Condition 2: Price breaks above 5-bar high OR below 5-bar low (prior BREAKOUT_PERIOD bars)
+        BigDecimal fiveBarHigh = highestHigh(candles, BREAKOUT_PERIOD);
+        BigDecimal fiveBarLow  = lowestLow(candles, BREAKOUT_PERIOD);
         boolean breakoutUp   = price.compareTo(fiveBarHigh) > 0;
         boolean breakoutDown = price.compareTo(fiveBarLow) < 0;
 
@@ -75,7 +75,7 @@ public class VolatilityBreakoutStrategy implements Strategy {
 
         // Condition 4: Volume spike > 150% of 20-bar average
         long currentVolume = candles.get(candles.size() - 1).getVolume();
-        double avgVolume   = averageVolume(candles, VOLUME_PERIOD + 1);
+        double avgVolume   = averageVolume(candles, VOLUME_PERIOD);
         if (avgVolume > 0 && currentVolume < avgVolume * VOLUME_SPIKE_RATIO) {
             return TradingSignal.HOLD;
         }
@@ -92,7 +92,7 @@ public class VolatilityBreakoutStrategy implements Strategy {
     }
 
     /**
-     * Returns the highest high over the last {@code period} candles,
+     * Returns the highest high over the prior {@code period} candles,
      * excluding the current (last) candle.
      */
     private BigDecimal highestHigh(List<Candle> candles, int period) {
@@ -107,7 +107,7 @@ public class VolatilityBreakoutStrategy implements Strategy {
     }
 
     /**
-     * Returns the lowest low over the last {@code period} candles,
+     * Returns the lowest low over the prior {@code period} candles,
      * excluding the current (last) candle.
      */
     private BigDecimal lowestLow(List<Candle> candles, int period) {

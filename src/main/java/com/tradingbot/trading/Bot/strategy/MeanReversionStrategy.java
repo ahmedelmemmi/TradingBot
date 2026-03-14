@@ -65,7 +65,7 @@ public class MeanReversionStrategy implements Strategy {
 
         // Condition 3: Volume normal or below average (exhaustion)
         long currentVolume = candles.get(candles.size() - 1).getVolume();
-        double avgVolume   = averageVolume(candles, MA20_PERIOD + 1);
+        double avgVolume   = averageVolume(candles, MA20_PERIOD);
         if (avgVolume > 0 && currentVolume > avgVolume * VOLUME_EXHAUSTION_RATIO) {
             return TradingSignal.HOLD;
         }
