@@ -9,28 +9,26 @@ import java.util.List;
 /**
  * Factory that selects the appropriate strategy based on the current market regime.
  *
- * <p>Decision tree (quality-over-quantity, targeting 80% win rate):</p>
+ * <p>Decision tree:</p>
  * <ul>
- *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link PerfectBreakoutStrategy} (primary setup)</li>
- *   <li>{@link MarketRegime#SIDEWAYS} → {@link PerfectBreakoutStrategy} (consolidation = sideways)</li>
- *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link NoTradeStrategy} (preserve capital)</li>
+ *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link SimplifiedBreakoutStrategy} (primary setup)</li>
+ *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link SimplifiedBreakoutStrategy} (volatile breakouts)</li>
+ *   <li>{@link MarketRegime#SIDEWAYS} → {@link NoTradeStrategy} (no edge in sideways)</li>
  *   <li>{@link MarketRegime#STRONG_DOWNTREND} → {@link NoTradeStrategy} (preserve capital)</li>
  *   <li>{@link MarketRegime#CRASH} → {@link NoTradeStrategy} (emergency halt)</li>
  * </ul>
- *
- * <p>Note: {@link PerfectBreakoutStrategy} performs its own internal regime check and will only
- * emit a BUY signal when the regime is {@link MarketRegime#STRONG_UPTREND}. Routing SIDEWAYS
- * regimes here allows the strategy to evaluate whether a consolidation breakout is forming while
- * still applying its strict internal filters.</p>
  */
 @Service
 public class RegimeAwareStrategyFactory {
 
-    private final PerfectBreakoutStrategy perfectBreakout;
-    private final NoTradeStrategy         noTrade = new NoTradeStrategy();
+    private final SimplifiedBreakoutStrategy simplifiedBreakout;
+    private final PerfectBreakoutStrategy    perfectBreakout;
+    private final NoTradeStrategy            noTrade = new NoTradeStrategy();
 
-    public RegimeAwareStrategyFactory(PerfectBreakoutStrategy perfectBreakout) {
-        this.perfectBreakout = perfectBreakout;
+    public RegimeAwareStrategyFactory(SimplifiedBreakoutStrategy simplifiedBreakout,
+                                      PerfectBreakoutStrategy perfectBreakout) {
+        this.simplifiedBreakout = simplifiedBreakout;
+        this.perfectBreakout    = perfectBreakout;
     }
 
     /**
@@ -43,15 +41,15 @@ public class RegimeAwareStrategyFactory {
     public Strategy getStrategy(MarketRegime regime) {
         return switch (regime) {
             case STRONG_UPTREND -> {
-                System.out.println("[Factory] Selecting PerfectBreakoutStrategy (STRONG_UPTREND)");
-                yield perfectBreakout;
+                System.out.println("[Factory] Using SimplifiedBreakoutStrategy (STRONG_UPTREND)");
+                yield simplifiedBreakout;
             }
-            case SIDEWAYS -> {
-                System.out.println("[Factory] Selecting PerfectBreakoutStrategy (SIDEWAYS - watching for breakout)");
-                yield perfectBreakout;
+            case HIGH_VOLATILITY -> {
+                System.out.println("[Factory] Using SimplifiedBreakoutStrategy (HIGH_VOLATILITY)");
+                yield simplifiedBreakout;
             }
-            case STRONG_DOWNTREND, CRASH, HIGH_VOLATILITY -> {
-                System.out.println("[Factory] Selecting NoTradeStrategy (" + regime + ") - preserving capital");
+            case SIDEWAYS, STRONG_DOWNTREND, CRASH -> {
+                System.out.println("[Factory] NO TRADES - regime: " + regime);
                 yield noTrade;
             }
         };
@@ -65,6 +63,7 @@ public class RegimeAwareStrategyFactory {
         return getStrategy(regime).evaluate(candles);
     }
 
-    public PerfectBreakoutStrategy getPerfectBreakoutStrategy() { return perfectBreakout; }
-    public NoTradeStrategy getNoTradeStrategy()                 { return noTrade; }
+    public SimplifiedBreakoutStrategy getSimplifiedBreakoutStrategy() { return simplifiedBreakout; }
+    public PerfectBreakoutStrategy getPerfectBreakoutStrategy()       { return perfectBreakout; }
+    public NoTradeStrategy getNoTradeStrategy()                       { return noTrade; }
 }
