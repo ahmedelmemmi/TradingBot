@@ -64,10 +64,10 @@ class BacktestValidationServiceTest {
         BacktestValidationResult result = service.validate(closed, curve, start);
 
         assertEquals(40, result.getTotalTrades());
-        assertTrue(result.getWinRate().compareTo(BigDecimal.valueOf(0.6)) == 0
-                || result.getWinRate().compareTo(BigDecimal.valueOf(0.6)) > 0
-                || result.getWinRate().compareTo(BigDecimal.valueOf(0.6)) < 0,
-                "Win rate should be calculated");
+        // Win rate should be approximately 0.6 (60%)
+        assertTrue(result.getWinRate().compareTo(BigDecimal.valueOf(0.55)) >= 0
+                && result.getWinRate().compareTo(BigDecimal.valueOf(0.65)) <= 0,
+                "Win rate should be approximately 60%");
         assertTrue(result.getAvgWin().compareTo(BigDecimal.ZERO) > 0, "Avg win should be positive");
     }
 
