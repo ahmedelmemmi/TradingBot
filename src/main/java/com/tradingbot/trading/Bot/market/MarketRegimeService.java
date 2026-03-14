@@ -19,6 +19,12 @@ public class MarketRegimeService {
         CRASH
     }
 
+    private static final int REGIME_PERSISTENCE_COUNT = 3;
+
+    private MarketRegime lastConfirmedRegime = MarketRegime.SIDEWAYS;
+    private MarketRegime candidateRegime = MarketRegime.SIDEWAYS;
+    private int candidateCount = 0;
+
     public MarketRegime detect(List<Candle> candles) {
 
         if (candles.size() < 60) {
@@ -36,28 +42,59 @@ public class MarketRegimeService {
         BigDecimal momentum = momentum(candles, 10);
         BigDecimal drawdownSpeed = drawdownSpeed(candles, 10);
 
-        // 🔴 REAL CRASH
-        if (drawdownSpeed.compareTo(BigDecimal.valueOf(0.12)) > 0) {
+        MarketRegime rawRegime = classifyRegime(
+                slope, volatility, momentum, drawdownSpeed);
+
+        return applyPersistence(rawRegime);
+    }
+
+    private MarketRegime classifyRegime(BigDecimal slope,
+                                         BigDecimal volatility,
+                                         BigDecimal momentum,
+                                         BigDecimal drawdownSpeed) {
+
+        if (drawdownSpeed.compareTo(BigDecimal.valueOf(0.15)) > 0) {
             return MarketRegime.CRASH;
         }
 
-        // 🔴 TRUE HIGH VOLATILITY
-        if (volatility.compareTo(BigDecimal.valueOf(0.01)) > 0) {
+        if (volatility.compareTo(BigDecimal.valueOf(0.025)) > 0) {
             return MarketRegime.HIGH_VOLATILITY;
         }
 
-        // 🔵 TREND
-        if (slope.compareTo(BigDecimal.valueOf(0.015)) > 0 &&
+        if (slope.compareTo(BigDecimal.valueOf(0.02)) > 0 &&
                 momentum.compareTo(BigDecimal.ZERO) > 0) {
             return MarketRegime.STRONG_UPTREND;
         }
 
-        if (slope.compareTo(BigDecimal.valueOf(-0.015)) < 0 &&
+        if (slope.compareTo(BigDecimal.valueOf(-0.02)) < 0 &&
                 momentum.compareTo(BigDecimal.ZERO) < 0) {
             return MarketRegime.STRONG_DOWNTREND;
         }
 
         return MarketRegime.SIDEWAYS;
+    }
+
+    private MarketRegime applyPersistence(MarketRegime rawRegime) {
+
+        if (rawRegime == MarketRegime.CRASH) {
+            lastConfirmedRegime = MarketRegime.CRASH;
+            candidateRegime = MarketRegime.CRASH;
+            candidateCount = REGIME_PERSISTENCE_COUNT;
+            return MarketRegime.CRASH;
+        }
+
+        if (rawRegime == candidateRegime) {
+            candidateCount++;
+        } else {
+            candidateRegime = rawRegime;
+            candidateCount = 1;
+        }
+
+        if (candidateCount >= REGIME_PERSISTENCE_COUNT) {
+            lastConfirmedRegime = candidateRegime;
+        }
+
+        return lastConfirmedRegime;
     }
 
     private BigDecimal movingAverage(List<Candle> candles, int period) {
@@ -103,10 +140,19 @@ public class MarketRegimeService {
     private BigDecimal drawdownSpeed(List<Candle> candles, int period) {
 
         BigDecimal peak = candles.get(candles.size() - period).getClose();
+        for (int i = candles.size() - period; i < candles.size(); i++) {
+            BigDecimal price = candles.get(i).getClose();
+            if (price.compareTo(peak) > 0) {
+                peak = price;
+            }
+        }
+
         BigDecimal last = candles.get(candles.size() - 1).getClose();
 
-        return peak.subtract(last)
+        BigDecimal dd = peak.subtract(last)
                 .divide(peak, 6, RoundingMode.HALF_UP);
+
+        return dd.max(BigDecimal.ZERO);
     }
 
     public Map<String, BigDecimal> debugMetrics(List<Candle> candles) {

@@ -13,6 +13,7 @@ public class PortfolioRiskService {
 
     private static final BigDecimal MAX_PORTFOLIO_RISK = BigDecimal.valueOf(0.05);
     private static final int MAX_POSITIONS = 5;
+    private static final BigDecimal HARD_DRAWDOWN_BLOCK = BigDecimal.valueOf(0.25);
 
     private BigDecimal startingCapital = BigDecimal.ZERO;
 
@@ -21,11 +22,10 @@ public class PortfolioRiskService {
     }
 
     /**
-     * ONLY hard blocks:
+     * Hard blocks:
      * - too many positions
      * - crash regime
-     *
-     * Drawdown does NOT block trading anymore.
+     * - severe drawdown (>25% from starting capital)
      */
     public boolean canOpenNewPosition(
             List<Position> openPositions,
@@ -43,37 +43,63 @@ public class PortfolioRiskService {
             return false;
         }
 
+        if (regime == MarketRegimeService.MarketRegime.STRONG_DOWNTREND) {
+            System.out.println("RISK BLOCK: strong downtrend regime");
+            return false;
+        }
+
+        if (startingCapital.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal ddFromStart = startingCapital.subtract(currentEquity)
+                    .divide(startingCapital, 4, RoundingMode.HALF_UP);
+            if (ddFromStart.compareTo(HARD_DRAWDOWN_BLOCK) > 0) {
+                System.out.println("RISK BLOCK: severe drawdown > 25% from start");
+                return false;
+            }
+        }
+
         return true;
     }
 
     /**
-     * Adaptive risk multiplier based on drawdown.
-     * This replaces the old HARD BLOCK.
+     * Adaptive risk multiplier based on drawdown from peak equity.
      */
-    public BigDecimal adjustRiskByDrawdown(BigDecimal currentEquity) {
+    public BigDecimal adjustRiskByDrawdown(BigDecimal currentEquity, BigDecimal peakEquity) {
 
-        if (startingCapital.compareTo(BigDecimal.ZERO) == 0) {
+        if (peakEquity.compareTo(BigDecimal.ZERO) == 0) {
             return BigDecimal.ONE;
         }
 
         BigDecimal drawdown =
-                startingCapital.subtract(currentEquity)
-                        .divide(startingCapital, 4, RoundingMode.HALF_UP);
+                peakEquity.subtract(currentEquity)
+                        .divide(peakEquity, 4, RoundingMode.HALF_UP);
 
-        // < 10% DD → full risk
-        if (drawdown.compareTo(BigDecimal.valueOf(0.10)) < 0) {
+        if (drawdown.compareTo(BigDecimal.valueOf(0.05)) < 0) {
             return BigDecimal.ONE;
         }
 
-        // 10-20% DD → reduce size
-        if (drawdown.compareTo(BigDecimal.valueOf(0.20)) < 0) {
+        if (drawdown.compareTo(BigDecimal.valueOf(0.10)) < 0) {
+            return BigDecimal.valueOf(0.75);
+        }
+
+        if (drawdown.compareTo(BigDecimal.valueOf(0.15)) < 0) {
             System.out.println("RISK REDUCE: drawdown > 10%");
             return BigDecimal.valueOf(0.5);
         }
 
-        // >20% DD → trade very small
-        System.out.println("RISK HEAVY REDUCE: drawdown > 20%");
-        return BigDecimal.valueOf(0.25);
+        if (drawdown.compareTo(BigDecimal.valueOf(0.20)) < 0) {
+            System.out.println("RISK HEAVY REDUCE: drawdown > 15%");
+            return BigDecimal.valueOf(0.25);
+        }
+
+        System.out.println("RISK MINIMAL: drawdown > 20%");
+        return BigDecimal.valueOf(0.10);
+    }
+
+    /**
+     * Legacy overload for backward compatibility.
+     */
+    public BigDecimal adjustRiskByDrawdown(BigDecimal currentEquity) {
+        return adjustRiskByDrawdown(currentEquity, startingCapital);
     }
 
     /**
@@ -85,11 +111,11 @@ public class PortfolioRiskService {
 
             case STRONG_UPTREND -> BigDecimal.ONE;
 
-            case SIDEWAYS -> BigDecimal.valueOf(0.6);
+            case SIDEWAYS -> BigDecimal.valueOf(0.5);
 
-            case HIGH_VOLATILITY -> BigDecimal.valueOf(0.4);
+            case HIGH_VOLATILITY -> BigDecimal.valueOf(0.3);
 
-            case STRONG_DOWNTREND -> BigDecimal.valueOf(0.25);
+            case STRONG_DOWNTREND -> BigDecimal.valueOf(0.15);
 
             case CRASH -> BigDecimal.ZERO;
         };
