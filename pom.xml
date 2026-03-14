@@ -64,6 +64,13 @@
 			<version>4.30.0</version>
 		</dependency>
 
+		<!-- Yahoo Finance API (real historical market data) -->
+		<dependency>
+			<groupId>com.yahoofinance-api</groupId>
+			<artifactId>YahooFinanceAPI</artifactId>
+			<version>3.17.0</version>
+		</dependency>
+
 		<!-- Testing -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

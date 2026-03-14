@@ -12,8 +12,10 @@ import com.tradingbot.trading.Bot.broker.IBKRPaperBrokerAdapter;
 import com.tradingbot.trading.Bot.domain.Candle;
 import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
+import com.tradingbot.trading.Bot.market.MarketDataProvider;
 import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
+import com.tradingbot.trading.Bot.market.YahooFinanceMarketDataProvider;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.strategy.PerfectBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.*;
 
 @RestController
@@ -38,6 +41,7 @@ public class TestController {
     private final MarketRegimeService marketRegimeService;
     private final PortfolioBacktestEngine portfolioBacktestEngine;
     private final BacktestValidationService backtestValidationService;
+    private final YahooFinanceMarketDataProvider yahooFinanceProvider;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
@@ -49,7 +53,8 @@ public class TestController {
                           BrokerStateService brokerStateService,
                           MarketRegimeService marketRegimeService,
                           PortfolioBacktestEngine portfolioBacktestEngine,
-                          BacktestValidationService backtestValidationService) {
+                          BacktestValidationService backtestValidationService,
+                          YahooFinanceMarketDataProvider yahooFinanceProvider) {
 
         this.marketDataService         = marketDataService;
         this.rsiStrategyService        = rsiStrategyService;
@@ -62,6 +67,7 @@ public class TestController {
         this.marketRegimeService       = marketRegimeService;
         this.portfolioBacktestEngine   = portfolioBacktestEngine;
         this.backtestValidationService = backtestValidationService;
+        this.yahooFinanceProvider      = yahooFinanceProvider;
     }
 
     /*
@@ -505,6 +511,119 @@ public class TestController {
         }
 
         return result;
+    }
+
+    /*
+    ======================================================
+    ✅ REAL DATA BACKTEST – Yahoo Finance SPY 2024
+    Downloads 2024 SPY daily candles from Yahoo Finance and
+    runs the PerfectBreakoutStrategy on real market data.
+    Use this to validate the strategy edge on actual history
+    before switching to live trading.
+
+    ⚠ Requires internet access to Yahoo Finance.
+    ======================================================
+     */
+    @GetMapping("/backtest/real/spy-2024")
+    public Map<String, Object> backtestRealSpy2024() {
+
+        LocalDateTime from = LocalDateTime.of(2024, 1, 1, 0, 0);
+        LocalDateTime to   = LocalDateTime.of(2024, 12, 31, 23, 59);
+
+        List<Candle> candles = yahooFinanceProvider.getCandles("SPY", 1000, from, to);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("dataSource",    yahooFinanceProvider.getProviderName());
+        response.put("symbol",        "SPY");
+        response.put("from",          from.toLocalDate().toString());
+        response.put("to",            to.toLocalDate().toString());
+        response.put("candlesLoaded", candles.size());
+
+        if (candles.isEmpty()) {
+            response.put("error",
+                    "No data loaded – check internet connectivity or try again later");
+            return response;
+        }
+
+        BacktestResult result = backtestEngine.runStrategy(
+                "SPY", candles, perfectBreakoutStrategy);
+
+        response.put("startCapital",  result.getStartingCapital());
+        response.put("endCapital",    result.getEndingCapital());
+        response.put("totalPnL",      result.getTotalPnL());
+        response.put("totalTrades",   result.getTotalTrades());
+        response.put("winningTrades", result.getWinningTrades());
+        response.put("losingTrades",  result.getLosingTrades());
+        response.put("winRate",       result.getWinRate());
+        response.put("profitFactor",  result.getProfitFactor());
+        response.put("expectancy",    result.getExpectancy());
+        response.put("maxDrawdown",   result.getMaxDrawdown());
+
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ MOCK vs REAL COMPARISON – SPY 2024
+    Runs the PerfectBreakoutStrategy on both mock STRONG_UPTREND
+    data and real Yahoo Finance SPY 2024 data side-by-side.
+    Use this to confirm whether the mock results reflect real
+    market behaviour before going live.
+
+    ⚠ Requires internet access to Yahoo Finance.
+    ======================================================
+     */
+    @GetMapping("/backtest/compare/spy-2024")
+    public Map<String, Object> compareBacktestSpy2024() {
+
+        // ── Mock run ──────────────────────────────────────────────────────────
+        List<Candle> mockCandles = marketDataService.generateCandles(
+                "SPY", 250, MockMarketDataService.MarketScenario.STRONG_UPTREND);
+
+        BacktestResult mockResult = backtestEngine.runStrategy(
+                "SPY", mockCandles, perfectBreakoutStrategy);
+
+        Map<String, Object> mockSummary = new LinkedHashMap<>();
+        mockSummary.put("dataSource",    "MOCK (STRONG_UPTREND, 250 bars)");
+        mockSummary.put("totalTrades",   mockResult.getTotalTrades());
+        mockSummary.put("winRate",       mockResult.getWinRate());
+        mockSummary.put("profitFactor",  mockResult.getProfitFactor());
+        mockSummary.put("totalPnL",      mockResult.getTotalPnL());
+        mockSummary.put("maxDrawdown",   mockResult.getMaxDrawdown());
+
+        // ── Real run ──────────────────────────────────────────────────────────
+        LocalDateTime from = LocalDateTime.of(2024, 1, 1, 0, 0);
+        LocalDateTime to   = LocalDateTime.of(2024, 12, 31, 23, 59);
+
+        List<Candle> realCandles = yahooFinanceProvider.getCandles("SPY", 1000, from, to);
+
+        Map<String, Object> realSummary = new LinkedHashMap<>();
+        realSummary.put("dataSource",    "YAHOO_FINANCE (SPY, 2024-01-01 to 2024-12-31)");
+        realSummary.put("candlesLoaded", realCandles.size());
+
+        if (realCandles.isEmpty()) {
+            realSummary.put("error",
+                    "No data loaded – check internet connectivity or try again later");
+        } else {
+            BacktestResult realResult = backtestEngine.runStrategy(
+                    "SPY", realCandles, perfectBreakoutStrategy);
+
+            realSummary.put("totalTrades",  realResult.getTotalTrades());
+            realSummary.put("winRate",      realResult.getWinRate());
+            realSummary.put("profitFactor", realResult.getProfitFactor());
+            realSummary.put("totalPnL",     realResult.getTotalPnL());
+            realSummary.put("maxDrawdown",  realResult.getMaxDrawdown());
+        }
+
+        // ── Side-by-side comparison ───────────────────────────────────────────
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("mock", mockSummary);
+        response.put("real", realSummary);
+        response.put("note",
+                "If mock and real results are similar, the mock is a good proxy. "
+                + "If they differ, adjust the strategy parameters for real market conditions.");
+
+        return response;
     }
 
 }

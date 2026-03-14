@@ -95,8 +95,8 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
 
         new Thread(() -> {
             while (client.isConnected()) {
-                signal.waitForSignal();
                 try {
+                    signal.waitForSignal();
                     reader.processMsgs();
                 } catch (Exception e) {
                     e.printStackTrace();
