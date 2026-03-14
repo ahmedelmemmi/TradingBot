@@ -22,7 +22,7 @@ import java.util.List;
  *   <li><b>Volume above average:</b> Current bar volume &gt; {@value #MIN_VOLUME_RATIO_PCT}%
  *       of the 20-bar average (no dry-up requirement).</li>
  *   <li><b>Price breakout:</b> Close &gt; highest high of the prior {@value #BREAKOUT_PERIOD}
- *       bars + 0.05% buffer.</li>
+ *       bars + 0.20% buffer.</li>
  *   <li><b>RSI positive momentum:</b> RSI(14) &gt; 50.</li>
  * </ol>
  */
@@ -38,8 +38,8 @@ public class SimplifiedBreakoutStrategy implements Strategy {
     /** Look-back period for the breakout high (5 bars). */
     public static final int BREAKOUT_PERIOD = 5;
 
-    /** Tiny buffer above the 5-bar high to confirm the breakout (0.05%). */
-    public static final double BREAKOUT_BUFFER = 1.0005;
+    /** Buffer above the 5-bar high to confirm the breakout (0.20%). */
+    public static final double BREAKOUT_BUFFER = 1.0020;
 
     /** RSI must be above this level to confirm positive momentum. */
     public static final double RSI_MIN = 50.0;
@@ -115,7 +115,7 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         }
         System.out.println("  → PASS: Volume above average");
 
-        // ── Condition 4: PRICE BREAKOUT (above 5-bar high + 0.05% buffer) ─────
+        // ── Condition 4: PRICE BREAKOUT (above 5-bar high + 0.20% buffer) ─────
         BigDecimal highest5 = getHighestHigh(candles, BREAKOUT_PERIOD);
         BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(BREAKOUT_BUFFER));
 
