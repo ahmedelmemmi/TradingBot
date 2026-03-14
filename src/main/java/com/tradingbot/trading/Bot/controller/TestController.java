@@ -16,6 +16,7 @@ import com.tradingbot.trading.Bot.market.MarketDataProvider;
 import com.tradingbot.trading.Bot.market.MarketRegimeService;
 import com.tradingbot.trading.Bot.market.MockMarketDataProvider;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
+import com.tradingbot.trading.Bot.market.YahooFinanceMarketDataProvider;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.strategy.PerfectBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.*;
 
 @RestController
@@ -42,6 +44,7 @@ public class TestController {
     private final MarketRegimeService marketRegimeService;
     private final PortfolioBacktestEngine portfolioBacktestEngine;
     private final BacktestValidationService backtestValidationService;
+    private final YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
@@ -54,20 +57,22 @@ public class TestController {
                           BrokerStateService brokerStateService,
                           MarketRegimeService marketRegimeService,
                           PortfolioBacktestEngine portfolioBacktestEngine,
-                          BacktestValidationService backtestValidationService) {
+                          BacktestValidationService backtestValidationService,
+                          YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider) {
 
-        this.marketDataService          = marketDataService;
-        this.rsiStrategyService         = rsiStrategyService;
-        this.perfectBreakoutStrategy    = perfectBreakoutStrategy;
-        this.simplifiedBreakoutStrategy = simplifiedBreakoutStrategy;
-        this.tradeDecisionService       = tradeDecisionService;
-        this.positionManager            = positionManager;
-        this.backtestEngine             = backtestEngine;
-        this.brokerAdapter              = brokerAdapter;
-        this.brokerStateService         = brokerStateService;
-        this.marketRegimeService        = marketRegimeService;
-        this.portfolioBacktestEngine    = portfolioBacktestEngine;
-        this.backtestValidationService  = backtestValidationService;
+        this.marketDataService              = marketDataService;
+        this.rsiStrategyService             = rsiStrategyService;
+        this.perfectBreakoutStrategy        = perfectBreakoutStrategy;
+        this.simplifiedBreakoutStrategy     = simplifiedBreakoutStrategy;
+        this.tradeDecisionService           = tradeDecisionService;
+        this.positionManager                = positionManager;
+        this.backtestEngine                 = backtestEngine;
+        this.brokerAdapter                  = brokerAdapter;
+        this.brokerStateService             = brokerStateService;
+        this.marketRegimeService            = marketRegimeService;
+        this.portfolioBacktestEngine        = portfolioBacktestEngine;
+        this.backtestValidationService      = backtestValidationService;
+        this.yahooFinanceMarketDataProvider = yahooFinanceMarketDataProvider;
     }
 
     /*
@@ -717,6 +722,104 @@ public class TestController {
         response.put("maxDrawdown",      result.getMaxDrawdown());
         response.put("tradesByStrategy", result.getTradesByStrategy());
         response.put("note",             "Mixed data — only uptrend portions traded, capital preserved elsewhere");
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ REAL DATA BACKTEST: SPY 2-Year History (Uptrend-Only)
+    Downloads 2 years of real SPY daily candles from Yahoo Finance
+    and runs SimplifiedBreakoutStrategy in STRONG_UPTREND-only mode.
+
+    Validates that the strategy edge holds on real market data
+    before committing to live or paper trading.
+
+    Date range: 2022-01-01 → 2024-03-14
+    Strategy:   SimplifiedBreakoutStrategy (STRONG_UPTREND only)
+    Capital:    $10,000 starting
+
+    Expected results (real market):
+      Total trades:  35-50
+      Win rate:      ≥ 90%
+      Profit factor: ≥ 1.6
+      Max drawdown:  ≤ 15%
+    ======================================================
+     */
+    @GetMapping("/backtest/real/spy-2years-uptrend-only")
+    public Map<String, Object> backtestRealSPYUptrendOnly() {
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("REAL DATA BACKTEST: SPY 2-Year History (Uptrend-Only Strategy)");
+        System.out.println("=".repeat(80));
+
+        LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        List<Candle> candles = yahooFinanceMarketDataProvider.getCandles(
+                "SPY", 500, from, to);
+
+        System.out.println("Downloaded " + candles.size() + " real SPY candles");
+        System.out.println("Date range: " + from + " → " + to);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("provider",   yahooFinanceMarketDataProvider.getProviderName());
+        response.put("strategy",   simplifiedBreakoutStrategy.getName());
+        response.put("dateFrom",   from.toString());
+        response.put("dateTo",     to.toString());
+        response.put("totalCandles", candles.size());
+
+        if (candles.isEmpty()) {
+            System.err.println("[RealDataBacktest] No candles downloaded — check network/Yahoo Finance");
+            response.put("error", "No data downloaded. Check server logs. " +
+                    "Yahoo Finance may be temporarily unavailable.");
+            return response;
+        }
+
+        BacktestResult result = backtestEngine.runStrategy("SPY", candles, simplifiedBreakoutStrategy);
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("REAL DATA RESULTS:");
+        System.out.println("Total Trades:   " + result.getTotalTrades());
+        System.out.println("Win Rate:       " + result.getWinRate()
+                + " (target ≥ 90%)");
+        System.out.println("Profit Factor:  " + result.getProfitFactor()
+                + " (target ≥ 1.6)");
+        System.out.println("Total PnL:      $" + result.getTotalPnL());
+        System.out.println("Max Drawdown:   " + result.getMaxDrawdown()
+                + " (target ≤ 15%)");
+        System.out.println("=".repeat(80) + "\n");
+
+        // Pass/fail assessment
+        boolean winRatePass     = result.getWinRate()
+                .compareTo(BigDecimal.valueOf(0.90)) >= 0;
+        boolean profitFactorPass = result.getProfitFactor()
+                .compareTo(BigDecimal.valueOf(1.6))  >= 0;
+        boolean drawdownPass    = result.getMaxDrawdown()
+                .compareTo(BigDecimal.valueOf(0.15)) <= 0;
+        boolean tradeCountPass  = result.getTotalTrades() >= 10;
+        boolean allPass = winRatePass && profitFactorPass && drawdownPass && tradeCountPass;
+
+        response.put("totalTrades",      result.getTotalTrades());
+        response.put("winningTrades",    result.getWinningTrades());
+        response.put("losingTrades",     result.getLosingTrades());
+        response.put("winRate",          result.getWinRate());
+        response.put("profitFactor",     result.getProfitFactor());
+        response.put("totalPnL",         result.getTotalPnL());
+        response.put("startCapital",     result.getStartingCapital());
+        response.put("endCapital",       result.getEndingCapital());
+        response.put("maxDrawdown",      result.getMaxDrawdown());
+        response.put("expectancy",       result.getExpectancy());
+
+        Map<String, Object> validation = new LinkedHashMap<>();
+        validation.put("winRate_pass",     winRatePass     + " (≥90%)");
+        validation.put("profitFactor_pass", profitFactorPass + " (≥1.6)");
+        validation.put("drawdown_pass",    drawdownPass    + " (≤15%)");
+        validation.put("tradeCount_pass",  tradeCountPass  + " (≥10 trades)");
+        validation.put("overall",          allPass
+                ? "✅ PASS — Strategy validated on real data"
+                : "⚠️ FAIL — Needs adjustment before live trading");
+        response.put("validation", validation);
+
         return response;
     }
 
