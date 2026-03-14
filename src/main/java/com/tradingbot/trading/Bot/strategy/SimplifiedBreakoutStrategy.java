@@ -21,7 +21,7 @@ import java.util.List;
  *   <li><b>Volatility spike:</b> ATR(14) &gt; {@value #VOLATILITY_THRESHOLD_PCT}% of price.</li>
  *   <li><b>Volume above average:</b> Current bar volume &gt; {@value #MIN_VOLUME_RATIO_PCT}%
  *       of the 20-bar average (no dry-up requirement).</li>
- *   <li><b>Price breakout:</b> Close &gt; highest high of the prior {@value #BREAKOUT_PERIOD}
+ *   <li><b>Price breakout:</b> Bar high &gt; highest high of the prior {@value #BREAKOUT_PERIOD}
  *       bars + 0.20% buffer.</li>
  *   <li><b>RSI positive momentum:</b> RSI(14) &gt; 50.</li>
  * </ol>
@@ -73,7 +73,8 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         }
 
         Candle current = candles.get(candles.size() - 1);
-        BigDecimal price = current.getClose();
+        BigDecimal price   = current.getClose();
+        BigDecimal barHigh = current.getHigh();
 
         // ── Condition 1: REGIME (STRONG_UPTREND only) ─────────────────────────
         MarketRegime regime = regimeService.detect(candles);
@@ -119,10 +120,10 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         BigDecimal highest5 = getHighestHigh(candles, BREAKOUT_PERIOD);
         BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(BREAKOUT_BUFFER));
 
-        System.out.println("[SimplifiedBreakout] Price: " + fmt(price)
+        System.out.println("[SimplifiedBreakout] Bar high: " + fmt(barHigh)
                 + " vs breakout: " + fmt(breakoutLevel));
 
-        if (price.compareTo(breakoutLevel) <= 0) {
+        if (barHigh.compareTo(breakoutLevel) <= 0) {
             System.out.println("  → REJECT: No price breakout");
             return TradingSignal.HOLD;
         }
