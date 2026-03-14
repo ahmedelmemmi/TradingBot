@@ -4,6 +4,7 @@ import com.tradingbot.trading.Bot.backtest.BacktestEngine;
 import com.tradingbot.trading.Bot.backtest.BacktestResult;
 import com.tradingbot.trading.Bot.backtest.BacktestValidationResult;
 import com.tradingbot.trading.Bot.backtest.BacktestValidationService;
+import com.tradingbot.trading.Bot.backtest.HybridBacktestResult;
 import com.tradingbot.trading.Bot.backtest.PortfolioBacktestEngine;
 import com.tradingbot.trading.Bot.backtest.PortfolioBacktestResult;
 import com.tradingbot.trading.Bot.broker.BrokerStateService;
@@ -396,6 +397,46 @@ public class TestController {
                 "AAPL", candles, rsiStrategyService);
 
         return result.getTradeLogCsv();
+    }
+
+    /*
+    ======================================================
+    ✅ HYBRID REGIME-BASED STRATEGY BACKTEST
+    Runs a full backtest using the RegimeAwareStrategyFactory.
+    Automatically switches strategy per market regime:
+      STRONG_UPTREND   → TrendFollowingStrategy
+      SIDEWAYS         → MeanReversionStrategy
+      HIGH_VOLATILITY  → VolatilityBreakoutStrategy
+      DOWNTREND/CRASH  → No trading (capital preserved)
+    Returns per-strategy trade counts and aggregate metrics.
+    ======================================================
+     */
+    @GetMapping("/backtest/hybrid")
+    public Map<String, Object> backtestHybrid() {
+
+        List<Candle> candles =
+                marketDataService.generateCandles(
+                        "AAPL",
+                        1000,
+                        MockMarketDataService.MarketScenario.RANDOM
+                );
+
+        HybridBacktestResult result = portfolioBacktestEngine.runHybrid("AAPL", candles);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("startCapital",    result.getStartCapital());
+        response.put("endCapital",      result.getEndCapital());
+        response.put("totalPnL",        result.getTotalPnL());
+        response.put("totalTrades",     result.getTotalTrades());
+        response.put("winningTrades",   result.getWinningTrades());
+        response.put("losingTrades",    result.getLosingTrades());
+        response.put("winRate",         result.getWinRate());
+        response.put("profitFactor",    result.getProfitFactor());
+        response.put("expectancy",      result.getExpectancy());
+        response.put("maxDrawdown",     result.getMaxDrawdown());
+        response.put("tradesByStrategy", result.getTradesByStrategy());
+
+        return response;
     }
 
 }

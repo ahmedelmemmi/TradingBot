@@ -8,6 +8,7 @@ import com.tradingbot.trading.Bot.portfolio.PortfolioRiskService;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.risk.AdaptiveRiskService;
 import com.tradingbot.trading.Bot.strategy.AtrCalculator;
+import com.tradingbot.trading.Bot.strategy.RegimeAwareStrategyFactory;
 import com.tradingbot.trading.Bot.strategy.Strategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
 import org.springframework.stereotype.Service;
@@ -37,6 +38,7 @@ public class PortfolioBacktestEngine {
     private final MarketRegimeService regimeService;
     private final SlippageService slippageService;
     private final AdaptiveRiskService adaptiveRiskService;
+    private final RegimeAwareStrategyFactory strategyFactory;
 
     private static final BigDecimal STARTING_CAPITAL = BigDecimal.valueOf(10_000);
     private static final BigDecimal COMMISSION        = BigDecimal.valueOf(1.0);
@@ -46,12 +48,14 @@ public class PortfolioBacktestEngine {
                                    PortfolioRiskService portfolioRiskService,
                                    MarketRegimeService regimeService,
                                    SlippageService slippageService,
-                                   AdaptiveRiskService adaptiveRiskService) {
-        this.positionManager     = positionManager;
+                                   AdaptiveRiskService adaptiveRiskService,
+                                   RegimeAwareStrategyFactory strategyFactory) {
+        this.positionManager      = positionManager;
         this.portfolioRiskService = portfolioRiskService;
-        this.regimeService       = regimeService;
-        this.slippageService     = slippageService;
-        this.adaptiveRiskService = adaptiveRiskService;
+        this.regimeService        = regimeService;
+        this.slippageService      = slippageService;
+        this.adaptiveRiskService  = adaptiveRiskService;
+        this.strategyFactory      = strategyFactory;
     }
 
     public PortfolioBacktestResult run(String symbol,
@@ -295,6 +299,169 @@ public class PortfolioBacktestEngine {
                 totalTrades, winningTrades, losingTrades,
                 winRate, profitFactor, expectancy, maxDrawdown
         );
+    }
+
+    /**
+     * Runs a hybrid regime-aware backtest for a single symbol.
+     * The strategy is dynamically selected per bar based on the detected market regime.
+     *
+     * <p>Regime-to-strategy mapping:</p>
+     * <ul>
+     *   <li>STRONG_UPTREND → TrendFollowingStrategy</li>
+     *   <li>SIDEWAYS → MeanReversionStrategy</li>
+     *   <li>HIGH_VOLATILITY → VolatilityBreakoutStrategy</li>
+     *   <li>STRONG_DOWNTREND / CRASH → no trading (capital preserved)</li>
+     * </ul>
+     *
+     * @param symbol  ticker symbol
+     * @param candles price/volume data
+     * @return backtest result including per-strategy trade counts
+     */
+    public HybridBacktestResult runHybrid(String symbol, List<Candle> candles) {
+
+        BigDecimal capital   = STARTING_CAPITAL;
+        BigDecimal peakEquity = STARTING_CAPITAL;
+
+        portfolioRiskService.initialize(capital);
+
+        positionManager.getOpenPositions().clear();
+        positionManager.getClosedPositions().clear();
+
+        List<BigDecimal> equityCurve = new ArrayList<>();
+        Map<String, Integer> cooldownMap = new HashMap<>();
+        Map<String, Integer> tradesByStrategy = new HashMap<>();
+
+        AtrCalculator atrCalc = new AtrCalculator();
+        String lastLoggedStrategy = null;
+
+        for (int i = 60; i < candles.size(); i++) {
+
+            List<Candle> subset = candles.subList(0, i + 1);
+            MarketRegime regime = regimeService.detect(subset);
+
+            Strategy strategy = strategyFactory.getStrategy(regime);
+
+            // Log strategy switch
+            String strategyName = strategy != null ? strategy.getName() : "NONE (no trading)";
+            if (!strategyName.equals(lastLoggedStrategy)) {
+                System.out.println("[Portfolio] Using " + strategyName + " (" + regime + ")");
+                lastLoggedStrategy = strategyName;
+            }
+
+            BigDecimal price = candles.get(i).getClose();
+            BigDecimal atr   = atrCalc.calculate(subset, 14);
+
+            positionManager.updatePrice(symbol, price);
+
+            capital = checkStopsWithCapitalReturn(symbol, price, atr, regime, capital, cooldownMap, i);
+
+            if (strategy == null) {
+                BigDecimal equity = calculateEquity(capital);
+                if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+                equityCurve.add(equity);
+                continue;
+            }
+
+            TradingSignal signal = strategy.evaluate(subset);
+
+            int cooldownUntil = cooldownMap.getOrDefault(symbol, 0);
+
+            if (signal == TradingSignal.BUY &&
+                    positionManager.getOpenPosition(symbol).isEmpty() &&
+                    i >= cooldownUntil) {
+
+                boolean allowed = portfolioRiskService.canOpenNewPosition(
+                        positionManager.getOpenPositions(), capital, regime);
+
+                if (!allowed) {
+                    BigDecimal equity = calculateEquity(capital);
+                    if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+                    equityCurve.add(equity);
+                    continue;
+                }
+
+                if (!portfolioRiskService.isPortfolioRiskAcceptable(
+                        positionManager.getOpenPositions(), calculateEquity(capital))) {
+                    BigDecimal equity = calculateEquity(capital);
+                    if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+                    equityCurve.add(equity);
+                    continue;
+                }
+
+                if (atr.compareTo(BigDecimal.ZERO) <= 0) {
+                    BigDecimal equity = calculateEquity(capital);
+                    if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+                    equityCurve.add(equity);
+                    continue;
+                }
+
+                BigDecimal stop = adaptiveRiskService.calculateAdaptiveStop(subset, price, regime);
+                BigDecimal take = price.add(atr.multiply(BigDecimal.valueOf(4.0)));
+
+                BigDecimal riskPct      = adaptiveRiskService.calculateKellyRiskPercent(
+                        positionManager.getClosedPositions());
+                BigDecimal riskPerTrade = capital.multiply(riskPct);
+                BigDecimal riskPerShare = price.subtract(stop).abs();
+
+                if (riskPerShare.compareTo(BigDecimal.ZERO) == 0) {
+                    BigDecimal equity = calculateEquity(capital);
+                    if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+                    equityCurve.add(equity);
+                    continue;
+                }
+
+                BigDecimal qty = riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
+
+                BigDecimal regimeMult = portfolioRiskService.adjustRiskByRegime(regime);
+                BigDecimal ddMult     = portfolioRiskService.adjustRiskByDrawdown(
+                        calculateEquity(capital), peakEquity);
+
+                qty = qty.multiply(regimeMult).multiply(ddMult)
+                        .setScale(0, RoundingMode.DOWN);
+
+                if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+                    BigDecimal equity = calculateEquity(capital);
+                    if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+                    equityCurve.add(equity);
+                    continue;
+                }
+
+                BigDecimal slippage = slippageService.calculateSlippage(atr, price, regime);
+                BigDecimal slippageAdjustedPrice = price.multiply(BigDecimal.ONE.add(slippage));
+
+                BigDecimal cost = slippageAdjustedPrice.multiply(qty).add(COMMISSION);
+
+                if (cost.compareTo(capital) > 0) {
+                    BigDecimal equity = calculateEquity(capital);
+                    if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+                    equityCurve.add(equity);
+                    continue;
+                }
+
+                capital = capital.subtract(cost);
+
+                Position position = new Position(symbol, slippageAdjustedPrice, qty, stop, take);
+                positionManager.openPosition(position);
+
+                tradesByStrategy.merge(strategy.getName(), 1, Integer::sum);
+
+                System.out.println("[Portfolio] HYBRID BUY " + symbol
+                        + " strategy=" + strategy.getName()
+                        + " regime=" + regime
+                        + " qty=" + qty
+                        + " price=" + slippageAdjustedPrice.setScale(4, RoundingMode.HALF_UP)
+                        + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
+            }
+
+            BigDecimal equity = calculateEquity(capital);
+            if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
+            equityCurve.add(equity);
+        }
+
+        capital = forceClose(symbol, candles, capital);
+
+        PortfolioBacktestResult base = buildResult(equityCurve, capital, peakEquity);
+        return new HybridBacktestResult(base, tradesByStrategy);
     }
 
     public PortfolioBacktestResult runPortfolio(
