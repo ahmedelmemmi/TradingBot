@@ -917,7 +917,8 @@ public class TestController {
             regimePass++;
 
             Candle  current = subset.get(subset.size() - 1);
-            BigDecimal price = current.getClose();
+            BigDecimal price   = current.getClose();
+            BigDecimal barHigh = current.getHigh();
 
             // ── Condition 2: ATR > 1.2% of price ─────────────────────────────
             BigDecimal atr    = atrCalc.calculate(subset, 14);
@@ -947,7 +948,7 @@ public class TestController {
             BigDecimal highest5      = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
             BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(SimplifiedBreakoutStrategy.BREAKOUT_BUFFER));
 
-            if (price.compareTo(breakoutLevel) <= 0) continue;
+            if (barHigh.compareTo(breakoutLevel) <= 0) continue;
             breakoutPass++;
 
             // ── Condition 5: RSI > 50 ─────────────────────────────────────────
@@ -983,7 +984,7 @@ public class TestController {
                 (regimePass > 0 ? atrPass + "/" + regimePass : "n/a") + " bars");
         conditions.put("c3_volume_above_" + (int)(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT * 100) + "pct",
                 (atrPass > 0 ? volumePass + "/" + atrPass : "n/a") + " bars");
-        conditions.put("c4_price_breakout_" + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "bar",
+        conditions.put("c4_high_breakout_" + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "bar",
                 (volumePass > 0 ? breakoutPass + "/" + volumePass : "n/a") + " bars");
         conditions.put("c5_rsi_above_" + (int) SimplifiedBreakoutStrategy.RSI_MIN,
                 (breakoutPass > 0 ? rsiPass + "/" + breakoutPass : "n/a") + " bars");
@@ -1028,8 +1029,8 @@ public class TestController {
                     + "in SimplifiedBreakoutStrategy.";
         } else if (breakoutPass == 0) {
             double bufferPct = (SimplifiedBreakoutStrategy.BREAKOUT_BUFFER - 1.0) * 100.0;
-            diagnosis = "❌ ROOT CAUSE — BREAKOUT: Price never breaks above the "
-                    + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "-bar high + "
+            diagnosis = "❌ ROOT CAUSE — BREAKOUT: Bar high never breaks above the "
+                    + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "-bar highest high + "
                     + String.format("%.2f", bufferPct) + "% buffer "
                     + "while the other conditions hold. "
                     + "Run /backtest/debug/real-data-breakout-test to find the first buffer level that generates trades.";
@@ -1140,10 +1141,10 @@ public class TestController {
             int breakouts = 0;
             for (int idx : funnelIndices) {
                 List<Candle> subset = candles.subList(0, idx + 1);
-                BigDecimal price    = subset.get(subset.size() - 1).getClose();
+                BigDecimal barHigh  = subset.get(subset.size() - 1).getHigh();
                 BigDecimal highest5 = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
                 BigDecimal level    = highest5.multiply(BigDecimal.valueOf(buffer));
-                if (price.compareTo(level) > 0) breakouts++;
+                if (barHigh.compareTo(level) > 0) breakouts++;
             }
 
             double pct = (buffer - 1.0) * 100.0;
@@ -1266,7 +1267,7 @@ public class TestController {
             // Breakout check
             BigDecimal highest5      = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
             BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(SimplifiedBreakoutStrategy.BREAKOUT_BUFFER));
-            boolean    breakout      = price.compareTo(breakoutLevel) > 0;
+            boolean    breakout      = high.compareTo(breakoutLevel) > 0;
             if (breakout) breakoutsFound++;
 
             uptrendBarsFound++;
@@ -1278,7 +1279,7 @@ public class TestController {
             row.put("barHigh",       high.setScale(4, RoundingMode.HALF_UP).toPlainString());
             row.put("highest5High",  highest5.setScale(4, RoundingMode.HALF_UP).toPlainString());
             row.put("breakoutLevel", breakoutLevel.setScale(4, RoundingMode.HALF_UP).toPlainString());
-            row.put("breakout",      breakout ? "✅ YES" : "❌ no  (close=" + price.setScale(2, RoundingMode.HALF_UP)
+            row.put("breakout",      breakout ? "✅ YES" : "❌ no  (high=" + high.setScale(2, RoundingMode.HALF_UP)
                     + " vs level=" + breakoutLevel.setScale(2, RoundingMode.HALF_UP) + ")");
             row.put("closeVsHigh",   price.compareTo(high) <= 0 ? "close≤high ✅" : "close>high ❌ DATA BUG");
             anatomyRows.add(row);
@@ -1302,8 +1303,8 @@ public class TestController {
                 diagnosis = "❌ DATA BUG: close > high on " + badBars + " bars. "
                         + "Adjusted-close is still being mixed with unadjusted high — check the fix.";
             } else {
-                diagnosis = "❌ Close ≤ high on all bars (data consistent), but close never exceeds "
-                        + "the 5-bar highest high. The breakout threshold may still be too strict "
+                diagnosis = "❌ Bar high ≤ breakout level on all bars (data consistent), but high never exceeds "
+                        + "the 5-bar highest high × buffer. The breakout threshold may still be too strict "
                         + "for current market conditions, or regime windows are too narrow.";
             }
         }
