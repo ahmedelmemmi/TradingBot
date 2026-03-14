@@ -171,21 +171,21 @@ class PerfectBreakoutStrategyTest {
     }
 
     @Test
-    void volumeSpikeThresholdIs1Point8x() {
+    void volumeSpikeThresholdIs1Point3x() {
         long avgVolume  = 100_000;
-        long spikeVolume = 180_000; // exactly 1.8×
+        long spikeVolume = 130_000; // exactly 1.3×
         double ratio = (double) spikeVolume / avgVolume;
         assertTrue(ratio >= PerfectBreakoutStrategy.VOLUME_SPIKE_MULTIPLE,
-                "180,000 / 100,000 = 1.8 should satisfy the spike threshold");
+                "130,000 / 100,000 = 1.3 should satisfy the spike threshold");
     }
 
     @Test
     void weakVolumeSpikeDoesNotSatisfyThreshold() {
         long avgVolume   = 100_000;
-        long weakVolume  = 150_000; // 1.5×, below 1.8× threshold
+        long weakVolume  = 120_000; // 1.2×, below 1.3× threshold
         double ratio = (double) weakVolume / avgVolume;
         assertFalse(ratio >= PerfectBreakoutStrategy.VOLUME_SPIKE_MULTIPLE,
-                "150,000 / 100,000 = 1.5 should NOT satisfy the spike threshold");
+                "120,000 / 100,000 = 1.2 should NOT satisfy the spike threshold");
     }
 
     // ── Condition 4: Price breakout ───────────────────────────────────────────

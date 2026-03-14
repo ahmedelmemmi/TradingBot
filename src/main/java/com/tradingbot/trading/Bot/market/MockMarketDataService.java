@@ -37,6 +37,8 @@ public class MockMarketDataService implements MarketDataService {
         LocalDateTime time = LocalDateTime.now()
                 .minusMinutes(numberOfCandles);
 
+        long prevVolume = getBaseVolume(scenario);
+
         for (int i = 0; i < numberOfCandles; i++) {
 
             BigDecimal move = switch (scenario) {
@@ -74,7 +76,8 @@ public class MockMarketDataService implements MarketDataService {
             BigDecimal low = newClose.min(lastClose)
                     .subtract(BigDecimal.valueOf(random.nextDouble() * 1.5));
 
-            long volume = generateVolume(scenario);
+            long volume = generateVolumeWithMeanReversion(scenario, prevVolume);
+            prevVolume = volume;
 
             Candle candle = new Candle(
                     symbol,
@@ -139,6 +142,41 @@ public class MockMarketDataService implements MarketDataService {
             default:
                 return 100_000 + random.nextInt(300_000);
         }
+    }
+
+    /**
+     * Returns the baseline volume for a given scenario, used as the mean-reversion
+     * target in {@link #generateVolumeWithMeanReversion}.
+     */
+    private long getBaseVolume(MarketScenario scenario) {
+        return switch (scenario) {
+            case CRASH           -> 600_000;
+            case SIDEWAYS_VOLATILE -> 400_000;
+            case STRONG_UPTREND, STRONG_DOWNTREND -> 300_000;
+            default              -> 200_000;
+        };
+    }
+
+    /**
+     * Generates a volume value using a mean-reverting model with Gaussian noise.
+     *
+     * <p>This creates realistic volume clustering: periods of compressed volume
+     * (dry-up) naturally followed by expansion (spike), which is the pattern
+     * required by the PerfectBreakoutStrategy volume conditions. The model uses
+     * a mean-reversion coefficient (alpha) so that volumes gradually drift back
+     * toward the scenario baseline while allowing wide natural excursions.</p>
+     *
+     * @param scenario   market scenario (determines baseline volume)
+     * @param prevVolume volume of the previous bar
+     * @return next bar volume, clamped to [50_000, 3_000_000]
+     */
+    private long generateVolumeWithMeanReversion(MarketScenario scenario, long prevVolume) {
+        long base  = getBaseVolume(scenario);
+        double alpha = 0.25; // mean-reversion speed (25% pull toward baseline per bar)
+        double noise = random.nextGaussian() * 0.45; // Gaussian noise (45% std of base)
+
+        long next = (long) (prevVolume * (1.0 - alpha) + base * alpha + base * noise);
+        return Math.max(50_000, Math.min(3_000_000, next));
     }
 
     @Override

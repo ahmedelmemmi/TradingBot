@@ -26,7 +26,10 @@ public class RsiCalculator {
         BigDecimal gain = BigDecimal.ZERO;
         BigDecimal loss = BigDecimal.ZERO;
 
-        for (int i = 1; i <= PERIOD; i++) {
+        int end   = candles.size() - 1;
+        int start = end - PERIOD;
+
+        for (int i = start + 1; i <= end; i++) {
             BigDecimal change = candles.get(i).getClose()
                     .subtract(candles.get(i - 1).getClose());
 
