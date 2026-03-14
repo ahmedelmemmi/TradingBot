@@ -18,7 +18,9 @@ import com.tradingbot.trading.Bot.market.MockMarketDataProvider;
 import com.tradingbot.trading.Bot.market.MockMarketDataService;
 import com.tradingbot.trading.Bot.market.YahooFinanceMarketDataProvider;
 import com.tradingbot.trading.Bot.position.PositionManager;
+import com.tradingbot.trading.Bot.strategy.AtrCalculator;
 import com.tradingbot.trading.Bot.strategy.PerfectBreakoutStrategy;
+import com.tradingbot.trading.Bot.strategy.RsiCalculator;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
 import com.tradingbot.trading.Bot.strategy.SimplifiedBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
@@ -27,6 +29,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -45,6 +48,7 @@ public class TestController {
     private final PortfolioBacktestEngine portfolioBacktestEngine;
     private final BacktestValidationService backtestValidationService;
     private final YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider;
+    private final RsiCalculator rsiCalculator;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
@@ -58,7 +62,8 @@ public class TestController {
                           MarketRegimeService marketRegimeService,
                           PortfolioBacktestEngine portfolioBacktestEngine,
                           BacktestValidationService backtestValidationService,
-                          YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider) {
+                          YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider,
+                          RsiCalculator rsiCalculator) {
 
         this.marketDataService              = marketDataService;
         this.rsiStrategyService             = rsiStrategyService;
@@ -73,6 +78,7 @@ public class TestController {
         this.portfolioBacktestEngine        = portfolioBacktestEngine;
         this.backtestValidationService      = backtestValidationService;
         this.yahooFinanceMarketDataProvider = yahooFinanceMarketDataProvider;
+        this.rsiCalculator                  = rsiCalculator;
     }
 
     /*
@@ -821,6 +827,257 @@ public class TestController {
         response.put("validation", validation);
 
         return response;
+    }
+
+    /*
+    ======================================================
+    ✅ REAL DATA DIAGNOSTIC: Root Cause Analysis for Zero Trades
+    Downloads real SPY data and performs a bar-by-bar analysis
+    of every condition in SimplifiedBreakoutStrategy to identify
+    EXACTLY which condition blocks signal generation.
+
+    Run this FIRST when real-data backtests return 0 trades.
+
+    What it reports:
+      - totalCandles: how many bars were downloaded
+      - regimeDistribution: how many bars each regime is detected
+      - conditionBreakdown: pass/fail counts for each of the 5
+        strategy conditions (regime → ATR → volume → breakout → RSI)
+      - sampleMetrics: average ATR%, slope thresholds for reference
+      - diagnosis: plain-language root cause
+
+    Date range: 2022-01-01 → 2024-03-14 (~2.25-year SPY history)
+    ======================================================
+     */
+    @GetMapping("/backtest/debug/real-data")
+    public Map<String, Object> debugRealData() {
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("REAL DATA DIAGNOSTIC — Root Cause Analysis for Zero Trades");
+        System.out.println("=".repeat(80));
+
+        LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        List<Candle> candles = yahooFinanceMarketDataProvider.getCandles("SPY", 1000, from, to);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol",      "SPY");
+        response.put("dateFrom",    from.toString());
+        response.put("dateTo",      to.toString());
+        response.put("totalCandles", candles.size());
+
+        if (candles.isEmpty()) {
+            response.put("diagnosis",
+                    "❌ DATA LAYER: Yahoo Finance returned 0 candles. " +
+                    "Check network connectivity. " +
+                    "Run /backtest/real/spy-2years-uptrend-only for full details.");
+            return response;
+        }
+
+        // ── Reset regime service so this run is clean ────────────────────────
+        marketRegimeService.reset();
+
+        AtrCalculator atrCalc = new AtrCalculator();
+
+        // Regime distribution counters
+        Map<String, Integer> regimeCounts = new LinkedHashMap<>();
+        for (MarketRegimeService.MarketRegime r : MarketRegimeService.MarketRegime.values()) {
+            regimeCounts.put(r.name(), 0);
+        }
+
+        // Condition pass counters (cumulative funnel)
+        int barsAnalyzed  = 0;
+        int regimePass    = 0;
+        int atrPass       = 0;
+        int volumePass    = 0;
+        int breakoutPass  = 0;
+        int rsiPass       = 0;
+
+        // Metrics accumulators
+        BigDecimal sumAtrPct   = BigDecimal.ZERO;
+        int        atrSamples  = 0;
+        BigDecimal sumSlope    = BigDecimal.ZERO;
+        int        slopeSamples = 0;
+
+        for (int i = SimplifiedBreakoutStrategy.MIN_CANDLES; i < candles.size(); i++) {
+
+            List<Candle> subset = candles.subList(0, i + 1);
+            MarketRegimeService.MarketRegime regime = marketRegimeService.detect(subset);
+
+            regimeCounts.merge(regime.name(), 1, Integer::sum);
+            barsAnalyzed++;
+
+            // ── Condition 1: STRONG_UPTREND ───────────────────────────────────
+            if (regime != MarketRegimeService.MarketRegime.STRONG_UPTREND) continue;
+            regimePass++;
+
+            Candle  current = subset.get(subset.size() - 1);
+            BigDecimal price = current.getClose();
+
+            // ── Condition 2: ATR > 1.2% of price ─────────────────────────────
+            BigDecimal atr    = atrCalc.calculate(subset, 14);
+            BigDecimal atrPct = price.compareTo(BigDecimal.ZERO) == 0
+                    ? BigDecimal.ZERO
+                    : atr.divide(price, 6, RoundingMode.HALF_UP);
+
+            sumAtrPct = sumAtrPct.add(atrPct);
+            atrSamples++;
+
+            if (atrPct.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT)) < 0) continue;
+            atrPass++;
+
+            // ── Condition 3: Volume ≥ 70% of 20-bar average ───────────────────
+            long currentVol = current.getVolume();
+            long avgVol     = diagAvgVolume(subset, 20);
+
+            BigDecimal volumeRatio = (avgVol == 0)
+                    ? BigDecimal.ZERO
+                    : BigDecimal.valueOf(currentVol)
+                            .divide(BigDecimal.valueOf(avgVol), 6, RoundingMode.HALF_UP);
+
+            if (volumeRatio.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT)) < 0) continue;
+            volumePass++;
+
+            // ── Condition 4: Price breakout above 5-bar high + 0.05% buffer ───
+            BigDecimal highest5      = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
+            BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(SimplifiedBreakoutStrategy.BREAKOUT_BUFFER));
+
+            if (price.compareTo(breakoutLevel) <= 0) continue;
+            breakoutPass++;
+
+            // ── Condition 5: RSI > 50 ─────────────────────────────────────────
+            try {
+                BigDecimal rsi = rsiCalculator.calculate(subset);
+                if (rsi.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.RSI_MIN)) < 0) continue;
+                rsiPass++;
+            } catch (Exception e) {
+                // Not enough bars for RSI — skip
+                continue;
+            }
+        }
+
+        // ── Slope metrics (sampled from last 60 bars of data) ─────────────────
+        if (candles.size() >= 60) {
+            List<Candle> tail = candles.subList(Math.max(0, candles.size() - 60), candles.size());
+            BigDecimal ma20 = diagMovingAverage(tail, 20);
+            BigDecimal ma50 = diagMovingAverage(tail, 50);
+            if (ma50.compareTo(BigDecimal.ZERO) > 0) {
+                sumSlope = ma20.subtract(ma50).divide(ma50, 6, RoundingMode.HALF_UP);
+                slopeSamples = 1;
+            }
+        }
+
+        // ── Build response ────────────────────────────────────────────────────
+        response.put("barsAnalyzed",       barsAnalyzed);
+        response.put("regimeDistribution", regimeCounts);
+
+        Map<String, String> conditions = new LinkedHashMap<>();
+        conditions.put("c1_regime_STRONG_UPTREND",
+                regimePass + "/" + barsAnalyzed + " bars");
+        conditions.put("c2_atr_above_" + (int)(SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT * 100) + "pct",
+                (regimePass > 0 ? atrPass + "/" + regimePass : "n/a") + " bars");
+        conditions.put("c3_volume_above_" + (int)(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT * 100) + "pct",
+                (atrPass > 0 ? volumePass + "/" + atrPass : "n/a") + " bars");
+        conditions.put("c4_price_breakout_" + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "bar",
+                (volumePass > 0 ? breakoutPass + "/" + volumePass : "n/a") + " bars");
+        conditions.put("c5_rsi_above_" + (int) SimplifiedBreakoutStrategy.RSI_MIN,
+                (breakoutPass > 0 ? rsiPass + "/" + breakoutPass : "n/a") + " bars");
+        conditions.put("all_conditions_met", rsiPass + " bars");
+        response.put("conditionBreakdown", conditions);
+
+        Map<String, String> metrics = new LinkedHashMap<>();
+        if (atrSamples > 0) {
+            BigDecimal avgAtrPct = sumAtrPct
+                    .divide(BigDecimal.valueOf(atrSamples), 6, RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100));
+            metrics.put("avgAtrPct_in_uptrend_bars",
+                    avgAtrPct.setScale(3, RoundingMode.HALF_UP) + "% (threshold: "
+                    + (SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT * 100) + "%)");
+        }
+        if (slopeSamples > 0) {
+            metrics.put("currentMa20Ma50Slope",
+                    sumSlope.multiply(BigDecimal.valueOf(100)).setScale(3, RoundingMode.HALF_UP)
+                    + "% (STRONG_UPTREND needs >"
+                    + (MarketRegimeService.STRONG_UPTREND_SLOPE_THRESHOLD * 100) + "%)");
+        }
+        response.put("sampleMetrics", metrics);
+
+        // ── Plain-language root cause ──────────────────────────────────────────
+        String diagnosis;
+        if (regimePass == 0) {
+            diagnosis = "❌ ROOT CAUSE — REGIME: STRONG_UPTREND was never detected across "
+                    + barsAnalyzed + " bars. The regime thresholds (slope>"
+                    + (MarketRegimeService.STRONG_UPTREND_SLOPE_THRESHOLD * 100) + "%, volatility<"
+                    + (MarketRegimeService.HIGH_VOLATILITY_RANGE_THRESHOLD * 100) + "%) "
+                    + "may not match real SPY daily data. Consider lowering the slope threshold "
+                    + "in MarketRegimeService.classifyRegime().";
+        } else if (atrPass == 0) {
+            diagnosis = "❌ ROOT CAUSE — ATR: ATR% is below the 1.2% threshold on all "
+                    + regimePass + " STRONG_UPTREND bars. Real daily SPY data has lower "
+                    + "volatility than mock data. Lower VOLATILITY_THRESHOLD_PCT in "
+                    + "SimplifiedBreakoutStrategy (e.g. 0.005 = 0.5%).";
+        } else if (volumePass == 0) {
+            diagnosis = "❌ ROOT CAUSE — VOLUME: Volume ratio falls below 70% of the 20-bar "
+                    + "average on all " + atrPass + " ATR-passing bars. Real SPY volume "
+                    + "can be erratic around earnings/holidays. Lower MIN_VOLUME_RATIO_PCT "
+                    + "in SimplifiedBreakoutStrategy.";
+        } else if (breakoutPass == 0) {
+            diagnosis = "❌ ROOT CAUSE — BREAKOUT: Price never breaks above the "
+                    + SimplifiedBreakoutStrategy.BREAKOUT_PERIOD + "-bar high + 0.05% buffer "
+                    + "while the other conditions hold. Consider reducing the BREAKOUT_BUFFER.";
+        } else if (rsiPass == 0) {
+            diagnosis = "❌ ROOT CAUSE — RSI: RSI is below " + (int) SimplifiedBreakoutStrategy.RSI_MIN
+                    + " on all " + breakoutPass + " breakout bars. Lower RSI_MIN in "
+                    + "SimplifiedBreakoutStrategy (e.g. 45).";
+        } else {
+            diagnosis = "✅ " + rsiPass + " bars pass ALL conditions. "
+                    + "Run /backtest/real/spy-2years-uptrend-only to execute the full backtest.";
+        }
+        response.put("diagnosis", diagnosis);
+
+        System.out.println("DIAGNOSTIC COMPLETE — " + diagnosis);
+        System.out.println("=".repeat(80) + "\n");
+
+        return response;
+    }
+
+    // ── Private diagnostic helpers ────────────────────────────────────────────
+
+    /** Highest high of the last {@code period} bars, excluding the current bar. */
+    private BigDecimal diagHighestHigh(List<Candle> candles, int period) {
+        BigDecimal max = BigDecimal.ZERO;
+        int end   = candles.size() - 1;
+        int start = Math.max(0, end - period);
+        for (int i = start; i < end; i++) {
+            if (candles.get(i).getHigh().compareTo(max) > 0) {
+                max = candles.get(i).getHigh();
+            }
+        }
+        return max;
+    }
+
+    /** Average volume of the last {@code period} bars, excluding the current bar. */
+    private long diagAvgVolume(List<Candle> candles, int period) {
+        int end   = candles.size() - 1;
+        int start = Math.max(0, end - period);
+        long sum  = 0;
+        int count = 0;
+        for (int i = start; i < end; i++) {
+            sum += candles.get(i).getVolume();
+            count++;
+        }
+        return count == 0 ? 0 : sum / count;
+    }
+
+    /** Simple moving average of the last {@code period} bars. */
+    private BigDecimal diagMovingAverage(List<Candle> candles, int period) {
+        if (candles.size() < period) return BigDecimal.ZERO;
+        BigDecimal sum = BigDecimal.ZERO;
+        for (int i = candles.size() - period; i < candles.size(); i++) {
+            sum = sum.add(candles.get(i).getClose());
+        }
+        return sum.divide(BigDecimal.valueOf(period), 6, RoundingMode.HALF_UP);
     }
 
 }

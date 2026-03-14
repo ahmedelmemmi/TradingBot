@@ -30,22 +30,22 @@ import java.util.List;
 public class SimplifiedBreakoutStrategy implements Strategy {
 
     /** ATR as a percentage of price must exceed this level (1.2%). */
-    static final double VOLATILITY_THRESHOLD_PCT = 0.012;
+    public static final double VOLATILITY_THRESHOLD_PCT = 0.012;
 
     /** Current volume must be at least this fraction of the 20-bar average (70%). */
-    static final double MIN_VOLUME_RATIO_PCT = 0.70;
+    public static final double MIN_VOLUME_RATIO_PCT = 0.70;
 
     /** Look-back period for the breakout high (5 bars). */
-    static final int BREAKOUT_PERIOD = 5;
+    public static final int BREAKOUT_PERIOD = 5;
 
     /** Tiny buffer above the 5-bar high to confirm the breakout (0.05%). */
-    static final double BREAKOUT_BUFFER = 1.0005;
+    public static final double BREAKOUT_BUFFER = 1.0005;
 
     /** RSI must be above this level to confirm positive momentum. */
-    static final double RSI_MIN = 50.0;
+    public static final double RSI_MIN = 50.0;
 
     /** Minimum number of candles required before any signal is produced. */
-    static final int MIN_CANDLES = 60;
+    public static final int MIN_CANDLES = 60;
 
     /** Look-back window for the average volume calculation. */
     private static final int VOLUME_AVG_PERIOD = 20;

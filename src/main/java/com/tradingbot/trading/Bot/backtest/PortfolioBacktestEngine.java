@@ -62,6 +62,9 @@ public class PortfolioBacktestEngine {
                                        List<Candle> candles,
                                        Strategy strategy) {
 
+        // Reset regime-persistence state so previous runs do not contaminate this one.
+        regimeService.reset();
+
         BigDecimal capital   = STARTING_CAPITAL;
         BigDecimal peakEquity = STARTING_CAPITAL;
 
@@ -318,6 +321,9 @@ public class PortfolioBacktestEngine {
      * @return backtest result including per-strategy trade counts
      */
     public HybridBacktestResult runHybrid(String symbol, List<Candle> candles) {
+
+        // Reset regime-persistence state so previous runs do not contaminate this one.
+        regimeService.reset();
 
         BigDecimal capital   = STARTING_CAPITAL;
         BigDecimal peakEquity = STARTING_CAPITAL;
