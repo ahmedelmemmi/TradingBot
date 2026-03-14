@@ -625,4 +625,99 @@ public class TestController {
         return response;
     }
 
+    /*
+    ======================================================
+    ✅ UPTREND-ONLY BACKTEST
+    Generates pure STRONG_UPTREND mock data and runs
+    SimplifiedBreakoutStrategy. Only trades when regime is
+    confirmed STRONG_UPTREND.
+
+    Diagnostic logging (server console):
+      [UptrendOnly] ✅ UPTREND: Trading with SimplifiedBreakoutStrategy
+      [UptrendOnly] ⏸️ SIDEWAYS: NO TRADING - Waiting for uptrend
+
+    Expected: high win rate on pure uptrend data.
+    ======================================================
+     */
+    @GetMapping("/backtest/uptrend-only")
+    public Map<String, Object> backtestUptrendOnly() {
+
+        System.out.println("\n[UptrendOnly] ========== UPTREND-ONLY BACKTEST ==========");
+
+        List<Candle> candles = marketDataService.generateCandles(
+                "AAPL",
+                1000,
+                MockMarketDataService.MarketScenario.STRONG_UPTREND
+        );
+
+        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, simplifiedBreakoutStrategy);
+
+        System.out.println("[UptrendOnly] ========== DONE ==========\n");
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("mode",         "uptrend-only");
+        response.put("dataScenario", "STRONG_UPTREND");
+        response.put("strategy",     simplifiedBreakoutStrategy.getName());
+        response.put("totalCandles", candles.size());
+        response.put("totalTrades",  result.getTotalTrades());
+        response.put("winRate",      result.getWinRate());
+        response.put("totalPnL",     result.getTotalPnL());
+        response.put("startCapital", result.getStartingCapital());
+        response.put("endCapital",   result.getEndingCapital());
+        response.put("maxDrawdown",  result.getMaxDrawdown());
+        response.put("note",         "Only trades confirmed STRONG_UPTREND — capital preserved in all other regimes");
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ HYBRID UPTREND-ONLY BACKTEST
+    Generates mixed (RANDOM) mock data covering multiple
+    regimes, but the RegimeAwareStrategyFactory only allows
+    trades when STRONG_UPTREND is detected. All sideways /
+    volatile / downtrend / crash bars are skipped.
+
+    Diagnostic logging (server console):
+      [UptrendOnly] ✅ UPTREND: Trading with SimplifiedBreakoutStrategy
+      [UptrendOnly] ⏸️ SIDEWAYS: NO TRADING - Waiting for uptrend
+      [UptrendOnly] ⏸️ CRASH: NO TRADING - Waiting for uptrend
+
+    Expected: fewer total trades than uptrend-only, but only
+    trades taken during confirmed uptrend windows.
+    ======================================================
+     */
+    @GetMapping("/backtest/hybrid-uptrend-only")
+    public Map<String, Object> backtestHybridUptrendOnly() {
+
+        System.out.println("\n[UptrendOnly] ========== HYBRID UPTREND-ONLY BACKTEST ==========");
+
+        List<Candle> candles = marketDataService.generateCandles(
+                "AAPL",
+                1000,
+                MockMarketDataService.MarketScenario.RANDOM
+        );
+
+        HybridBacktestResult result = portfolioBacktestEngine.runHybrid("AAPL", candles);
+
+        System.out.println("[UptrendOnly] ========== DONE ==========\n");
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("mode",             "hybrid-uptrend-only");
+        response.put("dataScenario",     "RANDOM (mixed regimes)");
+        response.put("strategy",         "SimplifiedBreakoutStrategy (STRONG_UPTREND only)");
+        response.put("startCapital",     result.getStartCapital());
+        response.put("endCapital",       result.getEndCapital());
+        response.put("totalPnL",         result.getTotalPnL());
+        response.put("totalTrades",      result.getTotalTrades());
+        response.put("winningTrades",    result.getWinningTrades());
+        response.put("losingTrades",     result.getLosingTrades());
+        response.put("winRate",          result.getWinRate());
+        response.put("profitFactor",     result.getProfitFactor());
+        response.put("expectancy",       result.getExpectancy());
+        response.put("maxDrawdown",      result.getMaxDrawdown());
+        response.put("tradesByStrategy", result.getTradesByStrategy());
+        response.put("note",             "Mixed data — only uptrend portions traded, capital preserved elsewhere");
+        return response;
+    }
+
 }
