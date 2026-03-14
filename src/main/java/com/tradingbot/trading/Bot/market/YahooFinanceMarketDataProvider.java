@@ -118,18 +118,15 @@ public class YahooFinanceMarketDataProvider implements MarketDataProvider {
         JsonNode series    = result.get(0);
         JsonNode timestamps = series.path("timestamp");
         JsonNode quote      = series.path("indicators").path("quote").get(0);
-        JsonNode adjClose   = series.path("indicators").path("adjclose");
 
         JsonNode opens   = quote.path("open");
         JsonNode highs   = quote.path("high");
         JsonNode lows    = quote.path("low");
-        JsonNode closes;
-        // Prefer adjusted close if available
-        if (adjClose.isArray() && !adjClose.isEmpty()) {
-            closes = adjClose.get(0).path("adjclose");
-        } else {
-            closes = quote.path("close");
-        }
+        // Always use the unadjusted close so that open/high/low/close are all on
+        // the same price scale.  Mixing adjusted-close with unadjusted high/low
+        // produces a systematic downward bias on close that prevents breakout
+        // detection (close always appears below the 5-bar unadjusted high).
+        JsonNode closes  = quote.path("close");
         JsonNode volumes = quote.path("volume");
 
         for (int i = 0; i < timestamps.size(); i++) {
@@ -162,6 +159,13 @@ public class YahooFinanceMarketDataProvider implements MarketDataProvider {
 
         System.out.println("[YahooFinance] Parsed " + candles.size()
                 + " candles for " + symbol);
+        int sample = Math.min(10, candles.size());
+        System.out.println("[YahooFinance] First " + sample + " candles (open/high/low/close/volume):");
+        for (int i = 0; i < sample; i++) {
+            Candle c = candles.get(i);
+            System.out.printf("  [%d] %s  O=%.4f  H=%.4f  L=%.4f  C=%.4f  V=%d%n",
+                    i, c.getTime(), c.getOpen(), c.getHigh(), c.getLow(), c.getClose(), c.getVolume());
+        }
         return candles;
     }
 }

@@ -1174,6 +1174,148 @@ public class TestController {
         return response;
     }
 
+    /*
+    ======================================================
+    ✅ CANDLE ANATOMY REPORT: Bar-by-bar inspection for the first 50 uptrend bars
+    ======================================================
+    Prints every bar that passes conditions 1–3 (regime + ATR + volume) and shows:
+      - bar index and date
+      - unadjusted close and high for the current bar
+      - highest high of the prior 5 bars (unadjusted)
+      - breakout level (5-bar high × buffer)
+      - whether the breakout condition is met
+    Use this to confirm that open/high/low/close are all on the same price scale
+    after the adjusted-close fix.
+    ======================================================
+     */
+    @GetMapping("/backtest/debug/real-data-candle-anatomy")
+    public Map<String, Object> candleAnatomy() {
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("CANDLE ANATOMY REPORT — first 50 STRONG_UPTREND bars");
+        System.out.println("=".repeat(80));
+
+        LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        List<Candle> candles = yahooFinanceMarketDataProvider.getCandles(
+                "SPY", MAX_CANDLES_FOR_DIAGNOSTICS, from, to);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol",       "SPY");
+        response.put("dateFrom",     from.toString());
+        response.put("dateTo",       to.toString());
+        response.put("totalCandles", candles.size());
+
+        if (candles.isEmpty()) {
+            response.put("error", "Yahoo Finance returned 0 candles. Check network connectivity.");
+            return response;
+        }
+
+        // Log first 5 raw candles so we can verify open ≤ close ≤ high etc.
+        List<Map<String, String>> rawSample = new ArrayList<>();
+        int rawLimit = Math.min(5, candles.size());
+        for (int i = 0; i < rawLimit; i++) {
+            Candle c = candles.get(i);
+            Map<String, String> entry = new LinkedHashMap<>();
+            entry.put("index", String.valueOf(i));
+            entry.put("date",  c.getTime().toLocalDate().toString());
+            entry.put("open",  c.getOpen().setScale(4, RoundingMode.HALF_UP).toPlainString());
+            entry.put("high",  c.getHigh().setScale(4, RoundingMode.HALF_UP).toPlainString());
+            entry.put("low",   c.getLow().setScale(4, RoundingMode.HALF_UP).toPlainString());
+            entry.put("close", c.getClose().setScale(4, RoundingMode.HALF_UP).toPlainString());
+            entry.put("volume", String.valueOf(c.getVolume()));
+            entry.put("closeNotAboveHigh", c.getClose().compareTo(c.getHigh()) <= 0 ? "✅ ok" : "❌ DATA BUG");
+            rawSample.add(entry);
+        }
+        response.put("rawCandleSample_first5", rawSample);
+
+        marketRegimeService.reset();
+        AtrCalculator atrCalc = new AtrCalculator();
+
+        List<Map<String, String>> anatomyRows = new ArrayList<>();
+        int uptrendBarsFound = 0;
+        int breakoutsFound   = 0;
+
+        for (int i = SimplifiedBreakoutStrategy.MIN_CANDLES; i < candles.size()
+                && uptrendBarsFound < 50; i++) {
+
+            List<Candle> subset = candles.subList(0, i + 1);
+            MarketRegimeService.MarketRegime regime = marketRegimeService.detect(subset);
+            if (regime != MarketRegimeService.MarketRegime.STRONG_UPTREND) continue;
+
+            Candle cur = subset.get(subset.size() - 1);
+            BigDecimal price = cur.getClose();
+            BigDecimal high  = cur.getHigh();
+
+            // ATR check
+            BigDecimal atr     = atrCalc.calculate(subset, 14);
+            BigDecimal atrPct  = price.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
+                    : atr.divide(price, 6, RoundingMode.HALF_UP);
+            if (atrPct.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT)) < 0)
+                continue;
+
+            // Volume check
+            long avgVol = diagAvgVolume(subset, 20);
+            long curVol = cur.getVolume();
+            BigDecimal volRatio = (avgVol == 0) ? BigDecimal.ZERO
+                    : BigDecimal.valueOf(curVol).divide(BigDecimal.valueOf(avgVol), 6, RoundingMode.HALF_UP);
+            if (volRatio.compareTo(BigDecimal.valueOf(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT)) < 0)
+                continue;
+
+            // Breakout check
+            BigDecimal highest5      = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
+            BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(SimplifiedBreakoutStrategy.BREAKOUT_BUFFER));
+            boolean    breakout      = price.compareTo(breakoutLevel) > 0;
+            if (breakout) breakoutsFound++;
+
+            uptrendBarsFound++;
+
+            Map<String, String> row = new LinkedHashMap<>();
+            row.put("barIndex",      String.valueOf(i));
+            row.put("date",          cur.getTime().toLocalDate().toString());
+            row.put("close",         price.setScale(4, RoundingMode.HALF_UP).toPlainString());
+            row.put("barHigh",       high.setScale(4, RoundingMode.HALF_UP).toPlainString());
+            row.put("highest5High",  highest5.setScale(4, RoundingMode.HALF_UP).toPlainString());
+            row.put("breakoutLevel", breakoutLevel.setScale(4, RoundingMode.HALF_UP).toPlainString());
+            row.put("breakout",      breakout ? "✅ YES" : "❌ no  (close=" + price.setScale(2, RoundingMode.HALF_UP)
+                    + " vs level=" + breakoutLevel.setScale(2, RoundingMode.HALF_UP) + ")");
+            row.put("closeVsHigh",   price.compareTo(high) <= 0 ? "close≤high ✅" : "close>high ❌ DATA BUG");
+            anatomyRows.add(row);
+        }
+
+        response.put("uptrendBarsAnalyzed", uptrendBarsFound);
+        response.put("breakoutsFound",      breakoutsFound);
+        response.put("anatomy",             anatomyRows);
+
+        String diagnosis;
+        if (breakoutsFound > 0) {
+            diagnosis = "✅ Breakouts detected (" + breakoutsFound + "/" + uptrendBarsFound
+                    + "). Data is healthy — strategy should generate trades.";
+        } else if (uptrendBarsFound == 0) {
+            diagnosis = "⚠️ No bars passed regime+ATR+volume filter. Check regime detection.";
+        } else {
+            // Check if close > high ever (data bug indicator)
+            long badBars = anatomyRows.stream()
+                    .filter(r -> r.get("closeVsHigh").contains("BUG")).count();
+            if (badBars > 0) {
+                diagnosis = "❌ DATA BUG: close > high on " + badBars + " bars. "
+                        + "Adjusted-close is still being mixed with unadjusted high — check the fix.";
+            } else {
+                diagnosis = "❌ Close ≤ high on all bars (data consistent), but close never exceeds "
+                        + "the 5-bar highest high. The breakout threshold may still be too strict "
+                        + "for current market conditions, or regime windows are too narrow.";
+            }
+        }
+        response.put("diagnosis", diagnosis);
+
+        System.out.println("ANATOMY COMPLETE — uptrend bars: " + uptrendBarsFound
+                + ", breakouts: " + breakoutsFound);
+        System.out.println("=".repeat(80) + "\n");
+
+        return response;
+    }
+
     /** Highest high of the last {@code period} bars, excluding the current bar. */
     private BigDecimal diagHighestHigh(List<Candle> candles, int period) {
         BigDecimal max = BigDecimal.ZERO;
