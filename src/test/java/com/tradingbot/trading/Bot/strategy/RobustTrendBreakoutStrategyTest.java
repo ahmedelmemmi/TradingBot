@@ -94,7 +94,7 @@ class RobustTrendBreakoutStrategyTest {
     }
 
     @Test
-    void returnsHoldWhenOnlyOneBreakooutBarEvenIfCloseAboveLevel() {
+    void returnsHoldWhenOnlyOneBreakoutBarEvenIfCloseAboveLevel() {
         // Only 1 breakout bar — fails condition 4 (2-bar confirmation required)
         List<Candle> candles = buildBreakoutSequence(true, true, 1);
         TradingSignal last = evaluateIncrementally(strategy, candles);
