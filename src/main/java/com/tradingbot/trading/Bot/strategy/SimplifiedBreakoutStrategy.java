@@ -22,24 +22,24 @@ import java.util.List;
  *   <li><b>Volume above average:</b> Current bar volume &gt; {@value #MIN_VOLUME_RATIO_PCT}%
  *       of the 20-bar average (no dry-up requirement).</li>
  *   <li><b>Price breakout:</b> Bar high &gt; highest high of the prior {@value #BREAKOUT_PERIOD}
- *       bars + 0.20% buffer.</li>
+ *       bars + 0.05% buffer.</li>
  *   <li><b>RSI positive momentum:</b> RSI(14) &gt; 50.</li>
  * </ol>
  */
 @Service
 public class SimplifiedBreakoutStrategy implements Strategy {
 
-    /** ATR as a percentage of price must exceed this level (1.2%). */
-    public static final double VOLATILITY_THRESHOLD_PCT = 0.012;
+    /** ATR as a percentage of price must exceed this level (0.9%). */
+    public static final double VOLATILITY_THRESHOLD_PCT = 0.009;
 
-    /** Current volume must be at least this fraction of the 20-bar average (70%). */
-    public static final double MIN_VOLUME_RATIO_PCT = 0.70;
+    /** Current volume must be at least this fraction of the 20-bar average (50%). */
+    public static final double MIN_VOLUME_RATIO_PCT = 0.50;
 
     /** Look-back period for the breakout high (5 bars). */
     public static final int BREAKOUT_PERIOD = 5;
 
-    /** Buffer above the 5-bar high to confirm the breakout (0.20%). */
-    public static final double BREAKOUT_BUFFER = 1.0020;
+    /** Multiplier applied to the 5-bar high to confirm the breakout (0.05% buffer → 1.0005). */
+    public static final double BREAKOUT_BUFFER = 1.0005;
 
     /** RSI must be above this level to confirm positive momentum. */
     public static final double RSI_MIN = 50.0;
@@ -83,7 +83,7 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         }
         System.out.println("[SimplifiedBreakout] ✓ Regime: STRONG_UPTREND");
 
-        // ── Condition 2: VOLATILITY SPIKE (ATR > 1.2% of price) ──────────────
+        // ── Condition 2: VOLATILITY SPIKE (ATR > 0.9% of price) ──────────────
         BigDecimal atr = atrCalculator.calculate(candles, 14);
         BigDecimal atrPercent = price.compareTo(BigDecimal.ZERO) == 0
                 ? BigDecimal.ZERO
@@ -98,7 +98,7 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         }
         System.out.println("  → PASS: Volatility sufficient");
 
-        // ── Condition 3: VOLUME ABOVE AVERAGE (≥70% of 20-bar avg) ───────────
+        // ── Condition 3: VOLUME ABOVE AVERAGE (≥50% of 20-bar avg) ───────────
         long avgVolume = getAverageVolume(candles, VOLUME_AVG_PERIOD);
         long currentVolume = current.getVolume();
 
@@ -116,7 +116,7 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         }
         System.out.println("  → PASS: Volume above average");
 
-        // ── Condition 4: PRICE BREAKOUT (above 5-bar high + 0.20% buffer) ─────
+        // ── Condition 4: PRICE BREAKOUT (above 5-bar high + 0.05% buffer) ─────
         BigDecimal highest5 = getHighestHigh(candles, BREAKOUT_PERIOD);
         BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(BREAKOUT_BUFFER));
 
