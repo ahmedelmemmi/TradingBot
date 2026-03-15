@@ -26,6 +26,8 @@ import com.tradingbot.trading.Bot.strategy.SimplifiedBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
 import com.tradingbot.trading.Bot.strategy.RobustTrendBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TunedBreakoutStrategy;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,6 +38,7 @@ import java.time.LocalDateTime;
 import java.util.*;
 
 @RestController
+@Tag(name = "TradingBot", description = "Backtesting and diagnostics endpoints for the TradingBot strategy engine")
 public class TestController {
 
     /** Maximum candle count fetched by real-data diagnostic endpoints. */
@@ -276,11 +279,13 @@ public class TestController {
      BROKER STATE
      -------------------------------------------------------
      */
+    @Operation(summary = "Broker state", description = "Returns current IBKR paper broker positions.")
     @GetMapping("/broker-state")
     public Object brokerState() {
         return brokerStateService.getPositions();
     }
 
+    @Operation(summary = "Regime detection test", description = "Tests MarketRegimeService regime detection on mock STRONG_UPTREND data.")
     @GetMapping("/regime-test")
     public Object regimeTest() {
 
@@ -369,6 +374,9 @@ public class TestController {
     pass/fail report. Blocks live trading if validation fails.
     ======================================================
      */
+    @Operation(summary = "Backtest validation",
+               description = "Runs PerfectBreakoutStrategy on mock uptrend data and validates against quality gates. " +
+                             "Pass/fail report for all criteria.")
     @GetMapping("/backtest/validate")
     public Map<String, Object> validateBacktest() {
 
@@ -595,6 +603,9 @@ public class TestController {
     Expected: 70%+ win rate on uptrend data.
     ======================================================
      */
+    @Operation(summary = "Mock uptrend backtest (SimplifiedBreakoutStrategy)",
+               description = "Runs SimplifiedBreakoutStrategy on 1000 bars of mock STRONG_UPTREND data. " +
+                             "Sanity check — expected 70%+ win rate.")
     @GetMapping("/backtest/mock/uptrend")
     public Map<String, Object> backtestMockUptrend() {
         MarketDataProvider provider = MockMarketDataProvider.forScenario(
@@ -625,6 +636,8 @@ public class TestController {
     SimplifiedBreakoutStrategy.
     ======================================================
      */
+    @Operation(summary = "Mock random market backtest",
+               description = "Runs SimplifiedBreakoutStrategy on 1000 bars of mixed (RANDOM) mock market data.")
     @GetMapping("/backtest/mock/random")
     public Map<String, Object> backtestMockRandom() {
         MarketDataProvider provider = MockMarketDataProvider.forScenario(
@@ -662,6 +675,9 @@ public class TestController {
     Expected: high win rate on pure uptrend data.
     ======================================================
      */
+    @Operation(summary = "Uptrend-only mock backtest",
+               description = "Runs RobustTrendBreakoutStrategy on 1000 bars of STRONG_UPTREND mock data. " +
+                             "Quality gates: win rate ≥60%, profit factor ≥1.2, drawdown ≤25%.")
     @GetMapping("/backtest/uptrend-only")
     public Map<String, Object> backtestUptrendOnly() {
 
@@ -702,6 +718,9 @@ public class TestController {
       max drawdown ≤25%
     ======================================================
      */
+    @Operation(summary = "Robust mock backtest with quality gates",
+               description = "Runs RobustTrendBreakoutStrategy on 1000 bars of mock STRONG_UPTREND data. " +
+                             "Reports pass/fail for: trade count ≥5, win rate ≥60%, profit factor ≥1.2, drawdown ≤25%.")
     @GetMapping("/backtest/robust")
     public Map<String, Object> backtestRobust() {
 
@@ -815,6 +834,9 @@ public class TestController {
       Max drawdown:  ≤ 15%
     ======================================================
      */
+    @Operation(summary = "SPY 2-year real data backtest",
+               description = "Downloads real SPY daily candles (Yahoo Finance, 2022-01-01 to 2024-03-14) and " +
+                             "runs SimplifiedBreakoutStrategy in STRONG_UPTREND-only mode.")
     @GetMapping("/backtest/real/spy-2years-uptrend-only")
     public Map<String, Object> backtestRealSPYUptrendOnly() {
 
@@ -1947,6 +1969,10 @@ public class TestController {
       Max drawdown:  ≤ 30%
     ======================================================
      */
+    @Operation(summary = "Multi-symbol real-data backtest (primary)",
+               description = "Downloads 2 years of real daily candles (Yahoo Finance) for 13 symbols and runs " +
+                             "RobustTrendBreakoutStrategy (MA20>MA50 + 20-bar close breakout + RSI>50). " +
+                             "Quality gates: win rate ≥60%, profit factor ≥1.2, drawdown ≤25%, trades ≥5.")
     @GetMapping("/backtest/real/multi")
     public Map<String, Object> backtestRealMultiSymbol() {
 
@@ -1962,12 +1988,12 @@ public class TestController {
         System.out.println("\n" + "=".repeat(80));
         System.out.println("MULTI-SYMBOL REAL DATA BACKTEST (" + SYMBOLS.size() + " symbols)");
         System.out.println("Date range: " + from + " → " + to);
-        System.out.println("Strategy:   " + simplifiedBreakoutStrategy.getName());
+        System.out.println("Strategy:   " + robustBreakoutStrategy.getName());
         System.out.println("=".repeat(80));
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("provider",   yahooFinanceMarketDataProvider.getProviderName());
-        response.put("strategy",   simplifiedBreakoutStrategy.getName());
+        response.put("strategy",   robustBreakoutStrategy.getName());
         response.put("dateFrom",   from.toString());
         response.put("dateTo",     to.toString());
         response.put("symbols",    SYMBOLS);
@@ -1996,15 +2022,15 @@ public class TestController {
             }
 
             BacktestResult result = backtestEngine.runStrategy(
-                    symbol, candles, simplifiedBreakoutStrategy);
+                    symbol, candles, robustBreakoutStrategy);
 
             boolean winRatePass     = result.getWinRate()
-                    .compareTo(BigDecimal.valueOf(0.50)) >= 0;
+                    .compareTo(BigDecimal.valueOf(0.60)) >= 0;
             boolean profitFactorPass = result.getProfitFactor()
-                    .compareTo(BigDecimal.ONE) >= 0;
+                    .compareTo(BigDecimal.valueOf(1.2)) >= 0;
             boolean drawdownPass    = result.getMaxDrawdown()
-                    .compareTo(BigDecimal.valueOf(0.30)) <= 0;
-            boolean tradeCountPass  = result.getTotalTrades() >= 8;
+                    .compareTo(BigDecimal.valueOf(0.25)) <= 0;
+            boolean tradeCountPass  = result.getTotalTrades() >= 5;
             boolean allPass = winRatePass && profitFactorPass && drawdownPass && tradeCountPass;
 
             symbolResult.put("totalTrades",   result.getTotalTrades());
@@ -2019,10 +2045,10 @@ public class TestController {
             symbolResult.put("expectancy",    result.getExpectancy());
 
             Map<String, Object> validation = new LinkedHashMap<>();
-            validation.put("winRate_pass",      winRatePass     + " (≥50%)");
-            validation.put("profitFactor_pass", profitFactorPass + " (≥1.0)");
-            validation.put("drawdown_pass",     drawdownPass    + " (≤30%)");
-            validation.put("tradeCount_pass",   tradeCountPass  + " (≥8 trades)");
+            validation.put("winRate_pass",      winRatePass     + " (≥60%)");
+            validation.put("profitFactor_pass", profitFactorPass + " (≥1.2)");
+            validation.put("drawdown_pass",     drawdownPass    + " (≤25%)");
+            validation.put("tradeCount_pass",   tradeCountPass  + " (≥5 trades)");
             validation.put("overall",           allPass ? "✅ PASS" : "⚠️ FAIL");
             symbolResult.put("validation", validation);
 
@@ -2085,6 +2111,9 @@ public class TestController {
     Endpoint: GET /backtest/real/multi/diagnostics
     ======================================================
      */
+    @Operation(summary = "Per-symbol filter diagnostics",
+               description = "Bar-by-bar filter funnel analysis for 13 symbols. Shows how many bars pass each " +
+                             "condition (regime, ATR, volume, breakout, RSI) and identifies the bottleneck.")
     @GetMapping("/backtest/real/multi/diagnostics")
     public Map<String, Object> multiAssetFilterDiagnostics() {
 

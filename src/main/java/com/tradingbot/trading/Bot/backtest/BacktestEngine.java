@@ -143,86 +143,90 @@ public class BacktestEngine {
             // ── 2. Delayed fill: enter at bar[i+1] after signal at bar[i] ──────
             if (pendingSignal && positionManager.getOpenPosition(symbol).isEmpty()) {
 
-                // FIX 3 — Entry confirmation: only enter if this bar's close is still
-                // at or above the signal-bar close, filtering same-day false breakouts.
-                if (signalBarClose != null
-                        && rawPrice.setScale(4, RoundingMode.HALF_UP).compareTo(signalBarClose) < 0) {
-                    System.out.println("[BacktestEngine] ENTRY CANCELLED (confirmation fail) "
-                            + symbol + " bar=" + i
-                            + " close=" + rawPrice.setScale(4, RoundingMode.HALF_UP)
-                            + " < signalClose=" + signalBarClose.setScale(4, RoundingMode.HALF_UP));
-                    pendingSignal  = false;
-                    signalBarClose = null;
-                    continue;
+                // Entry confirmation: cancel only if the next bar closes more than 2% below
+                // the signal-bar close (indicating a genuine reversal, not noise).
+                // The strategy already confirmed the breakout using bar close; we allow small
+                // intra-day pullbacks which are common on volatile stocks like NVDA/TSLA.
+                boolean cancelEntry = false;
+                if (signalBarClose != null && rawPrice.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal threshold = signalBarClose.multiply(BigDecimal.valueOf(0.98))
+                            .setScale(4, RoundingMode.HALF_UP);
+                    if (rawPrice.setScale(4, RoundingMode.HALF_UP).compareTo(threshold) < 0) {
+                        System.out.println("[BacktestEngine] ENTRY CANCELLED (reversal >2%) "
+                                + symbol + " bar=" + i
+                                + " close=" + rawPrice.setScale(4, RoundingMode.HALF_UP)
+                                + " < 98% of signalClose=" + threshold);
+                        cancelEntry = true;
+                    }
                 }
 
-                List<Candle> entrySubset = candles.subList(0, i + 1);
-                BigDecimal atr = atrCalc.calculate(entrySubset, 14);
-                MarketRegime entryRegime = regimeService.detect(entrySubset);
-                BigDecimal slippage = slippageService.calculateSlippage(atr, rawPrice, entryRegime);
+                if (!cancelEntry) {
+                    List<Candle> entrySubset = candles.subList(0, i + 1);
+                    BigDecimal atr = atrCalc.calculate(entrySubset, 14);
+                    MarketRegime entryRegime = regimeService.detect(entrySubset);
+                    BigDecimal slippage = slippageService.calculateSlippage(atr, rawPrice, entryRegime);
 
-                BigDecimal entryFill = rawPrice.multiply(BigDecimal.ONE.add(slippage));
+                    BigDecimal entryFill = rawPrice.multiply(BigDecimal.ONE.add(slippage));
 
-                // FIX 1 — ATR-based stop loss: 1.5×ATR(14) below entry (≈5.5% for real SPY).
-                // Keeps stop outside normal daily noise (real ATR ≈ 3.7% of price).
-                BigDecimal atrPct = entryFill.compareTo(BigDecimal.ZERO) == 0 || atr.compareTo(BigDecimal.ZERO) <= 0
-                        ? BigDecimal.ZERO
-                        : atr.divide(entryFill, 6, RoundingMode.HALF_UP);
+                    // ATR-based stop loss: 1.5×ATR(14) below entry (≈5.5% for real SPY).
+                    // Keeps stop outside normal daily noise (real ATR ≈ 3.7% of price).
+                    BigDecimal atrPct = entryFill.compareTo(BigDecimal.ZERO) == 0 || atr.compareTo(BigDecimal.ZERO) <= 0
+                            ? BigDecimal.ZERO
+                            : atr.divide(entryFill, 6, RoundingMode.HALF_UP);
 
-                if (atrPct.compareTo(BigDecimal.ZERO) <= 0) {
-                    System.out.println("[BacktestEngine] ENTRY SKIPPED (ATR=0) " + symbol + " bar=" + i);
-                    pendingSignal  = false;
-                    signalBarClose = null;
-                    continue;
-                }
+                    if (atrPct.compareTo(BigDecimal.ZERO) > 0) {
 
-                BigDecimal stopLoss = entryFill.multiply(
-                                BigDecimal.ONE.subtract(BigDecimal.valueOf(1.5).multiply(atrPct)))
-                        .setScale(4, RoundingMode.HALF_UP);
+                        BigDecimal stopLoss = entryFill.multiply(
+                                        BigDecimal.ONE.subtract(BigDecimal.valueOf(1.5).multiply(atrPct)))
+                                .setScale(4, RoundingMode.HALF_UP);
 
-                // FIX 2 — ATR-based take profit: 2.5×ATR(14) above entry (≈9.25% for real SPY).
-                // Maintains ≥1.67:1 reward-to-risk even with the wider stop.
-                BigDecimal takeProfit = entryFill.multiply(
-                                BigDecimal.ONE.add(BigDecimal.valueOf(2.5).multiply(atrPct)))
-                        .setScale(4, RoundingMode.HALF_UP);
+                        // ATR-based take profit: 2.5×ATR(14) above entry (≈9.25% for real SPY).
+                        // Maintains ≥1.67:1 reward-to-risk even with the wider stop.
+                        BigDecimal takeProfit = entryFill.multiply(
+                                        BigDecimal.ONE.add(BigDecimal.valueOf(2.5).multiply(atrPct)))
+                                .setScale(4, RoundingMode.HALF_UP);
 
-                BigDecimal riskPerTrade = capital.multiply(RISK_PER_TRADE);
-                BigDecimal riskPerShare = entryFill.subtract(stopLoss).abs();
+                        BigDecimal riskPerTrade = capital.multiply(RISK_PER_TRADE);
+                        BigDecimal riskPerShare = entryFill.subtract(stopLoss).abs();
 
-                if (riskPerShare.compareTo(BigDecimal.ZERO) > 0) {
+                        if (riskPerShare.compareTo(BigDecimal.ZERO) > 0) {
 
-                    BigDecimal quantity = riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
-                    BigDecimal maxAffordable = capital.divide(entryFill, 0, RoundingMode.DOWN);
-                    quantity = quantity.min(maxAffordable);
+                            BigDecimal quantity = riskPerTrade.divide(riskPerShare, 0, RoundingMode.DOWN);
+                            BigDecimal maxAffordable = capital.divide(entryFill, 0, RoundingMode.DOWN);
+                            quantity = quantity.min(maxAffordable);
 
-                    if (quantity.compareTo(BigDecimal.ZERO) > 0) {
+                            if (quantity.compareTo(BigDecimal.ZERO) > 0) {
 
-                        BigDecimal cost = entryFill.multiply(quantity).add(COMMISSION);
+                                BigDecimal cost = entryFill.multiply(quantity).add(COMMISSION);
 
-                        if (cost.compareTo(capital) <= 0) {
+                                if (cost.compareTo(capital) <= 0) {
 
-                            // Deduct capital AT ENTRY
-                            capital = capital.subtract(cost);
+                                    // Deduct capital AT ENTRY
+                                    capital = capital.subtract(cost);
 
-                            Position position = new Position(
-                                    symbol, entryFill, quantity, stopLoss, takeProfit);
-                            positionManager.openPosition(position);
+                                    Position position = new Position(
+                                            symbol, entryFill, quantity, stopLoss, takeProfit);
+                                    positionManager.openPosition(position);
 
-                            tradeId = TRADE_COUNTER.incrementAndGet();
-                            TradeRecord rec = new TradeRecord(
-                                    "T" + tradeId, symbol,
-                                    strategy.getName(), entryRegime.name(),
-                                    LocalDateTime.now(), entryFill, quantity,
-                                    stopLoss, takeProfit);
-                            tradeLog.add(rec);
-                            entryBar = i;
+                                    tradeId = TRADE_COUNTER.incrementAndGet();
+                                    TradeRecord rec = new TradeRecord(
+                                            "T" + tradeId, symbol,
+                                            strategy.getName(), entryRegime.name(),
+                                            LocalDateTime.now(), entryFill, quantity,
+                                            stopLoss, takeProfit);
+                                    tradeLog.add(rec);
+                                    entryBar = i;
 
-                            System.out.println("[BacktestEngine] FILL ENTRY " + symbol
-                                    + " bar=" + i
-                                    + " price=" + entryFill.setScale(4, RoundingMode.HALF_UP)
-                                    + " qty=" + quantity
-                                    + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
+                                    System.out.println("[BacktestEngine] FILL ENTRY " + symbol
+                                            + " bar=" + i
+                                            + " price=" + entryFill.setScale(4, RoundingMode.HALF_UP)
+                                            + " qty=" + quantity
+                                            + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
+                                }
+                            }
                         }
+                    } else {
+                        System.out.println("[BacktestEngine] ENTRY SKIPPED (ATR=0) " + symbol + " bar=" + i);
                     }
                 }
 
