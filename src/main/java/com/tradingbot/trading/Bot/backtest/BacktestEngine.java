@@ -22,6 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <ul>
  *   <li><b>1-bar delayed fills</b>: signal at bar[i] fills at bar[i+1]</li>
+ *   <li><b>Entry confirmation</b>: fill only if bar[i+1] close ≥ signal-bar close (filters false breakouts)</li>
+ *   <li><b>ATR-based stop loss</b>: 1.5×ATR(14) below entry (≈5.5% for real SPY data)</li>
+ *   <li><b>ATR-based take profit</b>: 2.5×ATR(14) above entry (≈9.25% for real SPY data)</li>
  *   <li><b>Dynamic slippage</b>: via {@link SlippageService} based on ATR and regime</li>
  *   <li><b>Capital deducted at entry</b>: (price × qty) removed from available capital immediately</li>
  *   <li><b>Gap risk</b>: SL execution uses fill price, not exact SL level</li>
@@ -76,9 +79,11 @@ public class BacktestEngine {
         List<TradeRecord> tradeLog    = new ArrayList<>();
 
         // pendingSignal: set when BUY is detected at bar[i], fills at bar[i+1]
-        boolean pendingSignal = false;
-        int     entryBar      = -1;
-        int     tradeId       = 0;
+        // signalBarClose: close price at signal bar — used for 1-bar entry confirmation
+        boolean    pendingSignal    = false;
+        BigDecimal signalBarClose   = null;
+        int        entryBar         = -1;
+        int        tradeId          = 0;
 
         AtrCalculator atrCalc = new AtrCalculator();
 
@@ -138,6 +143,19 @@ public class BacktestEngine {
             // ── 2. Delayed fill: enter at bar[i+1] after signal at bar[i] ──────
             if (pendingSignal && positionManager.getOpenPosition(symbol).isEmpty()) {
 
+                // FIX 3 — Entry confirmation: only enter if this bar's close is still
+                // at or above the signal-bar close, filtering same-day false breakouts.
+                if (signalBarClose != null
+                        && rawPrice.setScale(4, RoundingMode.HALF_UP).compareTo(signalBarClose) < 0) {
+                    System.out.println("[BacktestEngine] ENTRY CANCELLED (confirmation fail) "
+                            + symbol + " bar=" + i
+                            + " close=" + rawPrice.setScale(4, RoundingMode.HALF_UP)
+                            + " < signalClose=" + signalBarClose.setScale(4, RoundingMode.HALF_UP));
+                    pendingSignal  = false;
+                    signalBarClose = null;
+                    continue;
+                }
+
                 List<Candle> entrySubset = candles.subList(0, i + 1);
                 BigDecimal atr = atrCalc.calculate(entrySubset, 14);
                 MarketRegime entryRegime = regimeService.detect(entrySubset);
@@ -145,12 +163,27 @@ public class BacktestEngine {
 
                 BigDecimal entryFill = rawPrice.multiply(BigDecimal.ONE.add(slippage));
 
+                // FIX 1 — ATR-based stop loss: 1.5×ATR(14) below entry (≈5.5% for real SPY).
+                // Keeps stop outside normal daily noise (real ATR ≈ 3.7% of price).
+                BigDecimal atrPct = entryFill.compareTo(BigDecimal.ZERO) == 0 || atr.compareTo(BigDecimal.ZERO) <= 0
+                        ? BigDecimal.ZERO
+                        : atr.divide(entryFill, 6, RoundingMode.HALF_UP);
+
+                if (atrPct.compareTo(BigDecimal.ZERO) <= 0) {
+                    System.out.println("[BacktestEngine] ENTRY SKIPPED (ATR=0) " + symbol + " bar=" + i);
+                    pendingSignal  = false;
+                    signalBarClose = null;
+                    continue;
+                }
+
                 BigDecimal stopLoss = entryFill.multiply(
-                                BigDecimal.ONE.subtract(BigDecimal.valueOf(0.02)))
+                                BigDecimal.ONE.subtract(BigDecimal.valueOf(1.5).multiply(atrPct)))
                         .setScale(4, RoundingMode.HALF_UP);
 
+                // FIX 2 — ATR-based take profit: 2.5×ATR(14) above entry (≈9.25% for real SPY).
+                // Maintains ≥1.67:1 reward-to-risk even with the wider stop.
                 BigDecimal takeProfit = entryFill.multiply(
-                                BigDecimal.ONE.add(BigDecimal.valueOf(0.04)))
+                                BigDecimal.ONE.add(BigDecimal.valueOf(2.5).multiply(atrPct)))
                         .setScale(4, RoundingMode.HALF_UP);
 
                 BigDecimal riskPerTrade = capital.multiply(RISK_PER_TRADE);
@@ -193,16 +226,19 @@ public class BacktestEngine {
                     }
                 }
 
-                pendingSignal = false;
+                pendingSignal  = false;
+                signalBarClose = null;
             }
 
             // ── 3. Evaluate strategy signal (takes effect next bar) ───────────
             if (positionManager.getOpenPosition(symbol).isEmpty()) {
                 TradingSignal signal = strategy.evaluate(subset);
                 if (signal == TradingSignal.BUY) {
-                    pendingSignal = true;
+                    pendingSignal  = true;
+                    signalBarClose = rawPrice.setScale(4, RoundingMode.HALF_UP);
                     System.out.println("[BacktestEngine] BUY signal queued at bar=" + i
-                            + " (will fill at bar=" + (i + 1) + ")");
+                            + " (will fill at bar=" + (i + 1) + ")"
+                            + " signalClose=" + rawPrice.setScale(4, RoundingMode.HALF_UP));
                 }
             }
 
