@@ -56,7 +56,6 @@ public class RobustTrendBreakoutStrategy implements Strategy {
     public static final double RSI_MIN = 50.0;
 
     private final RsiCalculator rsiCalculator;
-    private final AtrCalculator atrCalculator = new AtrCalculator();
 
     public RobustTrendBreakoutStrategy(RsiCalculator rsiCalculator) {
         this.rsiCalculator = rsiCalculator;

@@ -61,7 +61,7 @@ public class BacktestValidationResult {
         this.winRatePass      = winRate.compareTo(BigDecimal.valueOf(MIN_WIN_RATE)) >= 0;
         this.expectancyPass   = expectancy.compareTo(BigDecimal.ZERO) > 0;
         this.profitFactorPass = profitFactor.compareTo(BigDecimal.valueOf(MIN_PROFIT_FACTOR)) >= 0;
-        this.drawdownPass     = maxDrawdown.compareTo(BigDecimal.valueOf(MAX_DRAWDOWN_THRESHOLD)) < 0;
+        this.drawdownPass     = maxDrawdown.compareTo(BigDecimal.valueOf(MAX_DRAWDOWN_THRESHOLD)) <= 0;
         this.rrRatioPass      = avgLoss.compareTo(BigDecimal.ZERO) == 0
                 || avgWin.compareTo(avgLoss) > 0;
     }

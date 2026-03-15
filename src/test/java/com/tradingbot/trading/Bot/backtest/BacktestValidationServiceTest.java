@@ -42,16 +42,16 @@ class BacktestValidationServiceTest {
     @Test
     void validationFailsWithHighDrawdown() {
         List<Position> closed = buildPositions(30, 50.0, 30.0, 0.6);
-        // Equity curve that drops 25%
+        // Equity curve that drops 26% (above the ≤25% threshold)
         List<BigDecimal> curve = new ArrayList<>();
         curve.add(BigDecimal.valueOf(10_000));
-        curve.add(BigDecimal.valueOf(7_500)); // 25% drawdown
+        curve.add(BigDecimal.valueOf(7_400)); // 26% drawdown — exceeds 25% limit
         curve.add(BigDecimal.valueOf(8_000));
         BigDecimal start = BigDecimal.valueOf(10_000);
 
         BacktestValidationResult result = service.validate(closed, curve, start);
 
-        assertFalse(result.isDrawdownPass(), "Should fail with 25% drawdown");
+        assertFalse(result.isDrawdownPass(), "Should fail with 26% drawdown (exceeds ≤25% threshold)");
     }
 
     @Test

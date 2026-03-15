@@ -34,9 +34,18 @@ class RobustTrendBreakoutStrategyTest {
 
     @Test
     void returnsHoldWhenInsufficientCandles() {
+        // 30 candles — well below MIN_CANDLES threshold
         List<Candle> candles = generateCandles(30, 100.0, 0.5, 100_000);
         assertEquals(TradingSignal.HOLD, strategy.evaluate(candles),
                 "Should return HOLD when fewer than 60 candles provided");
+    }
+
+    @Test
+    void returnsHoldAtBoundaryOf59Candles() {
+        // 59 candles — one below MIN_CANDLES (boundary check)
+        List<Candle> candles = generateCandles(59, 100.0, 0.5, 100_000);
+        assertEquals(TradingSignal.HOLD, strategy.evaluate(candles),
+                "Should return HOLD at exactly 59 candles (MIN_CANDLES is 60)");
     }
 
     // ── Condition 1: uptrend ──────────────────────────────────────────────────
