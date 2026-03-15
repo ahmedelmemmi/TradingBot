@@ -235,6 +235,8 @@ public class BacktestEngine {
             }
 
             // ── 3. Evaluate strategy signal (takes effect next bar) ───────────
+            // NOTE: This runs unconditionally after step 2, so if an entry was
+            // cancelled above, this bar is still evaluated for a fresh signal.
             if (positionManager.getOpenPosition(symbol).isEmpty()) {
                 TradingSignal signal = strategy.evaluate(subset);
                 if (signal == TradingSignal.BUY) {
