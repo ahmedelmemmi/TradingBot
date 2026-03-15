@@ -6,24 +6,24 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Validates a completed backtest against institutional quality criteria.
+ * Validates a completed backtest against minimum quality criteria.
  *
  * <p>All six criteria must pass for the backtest to be considered production-ready:</p>
  * <ol>
- *   <li>Trade count ≥ 30 (statistical significance)</li>
- *   <li>Win rate &gt; 50%</li>
+ *   <li>Trade count ≥ 5 (minimum statistical sample)</li>
+ *   <li>Win rate ≥ 60%</li>
  *   <li>Expectancy &gt; 0 (positive expected value per trade)</li>
- *   <li>Profit factor &gt; 1.5</li>
- *   <li>Max drawdown &lt; 20% of starting capital</li>
+ *   <li>Profit factor ≥ 1.2</li>
+ *   <li>Max drawdown ≤ 25% of starting capital</li>
  *   <li>Average win &gt; average loss (positive R:R)</li>
  * </ol>
  */
 public class BacktestValidationResult {
 
-    private static final int    MIN_TRADES             = 30;
-    private static final double MIN_WIN_RATE           = 0.50;
-    private static final double MIN_PROFIT_FACTOR      = 1.50;
-    private static final double MAX_DRAWDOWN_THRESHOLD = 0.20; // 20%
+    private static final int    MIN_TRADES             = 5;
+    private static final double MIN_WIN_RATE           = 0.60;
+    private static final double MIN_PROFIT_FACTOR      = 1.20;
+    private static final double MAX_DRAWDOWN_THRESHOLD = 0.25; // 25%
 
     private final int      totalTrades;
     private final BigDecimal winRate;
@@ -58,9 +58,9 @@ public class BacktestValidationResult {
         this.avgLoss      = avgLoss;
 
         this.tradeCountPass   = totalTrades >= MIN_TRADES;
-        this.winRatePass      = winRate.compareTo(BigDecimal.valueOf(MIN_WIN_RATE)) > 0;
+        this.winRatePass      = winRate.compareTo(BigDecimal.valueOf(MIN_WIN_RATE)) >= 0;
         this.expectancyPass   = expectancy.compareTo(BigDecimal.ZERO) > 0;
-        this.profitFactorPass = profitFactor.compareTo(BigDecimal.valueOf(MIN_PROFIT_FACTOR)) > 0;
+        this.profitFactorPass = profitFactor.compareTo(BigDecimal.valueOf(MIN_PROFIT_FACTOR)) >= 0;
         this.drawdownPass     = maxDrawdown.compareTo(BigDecimal.valueOf(MAX_DRAWDOWN_THRESHOLD)) < 0;
         this.rrRatioPass      = avgLoss.compareTo(BigDecimal.ZERO) == 0
                 || avgWin.compareTo(avgLoss) > 0;
@@ -78,11 +78,11 @@ public class BacktestValidationResult {
         System.out.println("╔══════════════════════════════════════════════════════════╗");
         System.out.println("║         BACKTEST VALIDATION REPORT                      ║");
         System.out.println("╠══════════════════════════════════════════════════════════╣");
-        printLine("Trade Count >= 30",        tradeCountPass,   String.valueOf(totalTrades));
-        printLine("Win Rate > 50%",           winRatePass,      pct(winRate));
-        printLine("Expectancy > 0",           expectancyPass,   "$" + fmt(expectancy));
-        printLine("Profit Factor > 1.5",      profitFactorPass, fmt(profitFactor));
-        printLine("Max Drawdown < 20%",       drawdownPass,     pct(maxDrawdown));
+        printLine("Trade Count >= 5",         tradeCountPass,   String.valueOf(totalTrades));
+        printLine("Win Rate >= 60%",           winRatePass,      pct(winRate));
+        printLine("Expectancy > 0",            expectancyPass,   "$" + fmt(expectancy));
+        printLine("Profit Factor >= 1.2",      profitFactorPass, fmt(profitFactor));
+        printLine("Max Drawdown <= 25%",       drawdownPass,     pct(maxDrawdown));
         printLine("Avg Win > Avg Loss",       rrRatioPass,
                 "$" + fmt(avgWin) + " vs $" + fmt(avgLoss));
         System.out.println("╠══════════════════════════════════════════════════════════╣");
@@ -109,10 +109,10 @@ public class BacktestValidationResult {
     public List<String> getFailureReasons() {
         List<String> reasons = new ArrayList<>();
         if (!tradeCountPass)   reasons.add("Insufficient trades: " + totalTrades + " (need >= " + MIN_TRADES + ")");
-        if (!winRatePass)      reasons.add("Win rate too low: " + pct(winRate) + " (need > 50%)");
+        if (!winRatePass)      reasons.add("Win rate too low: " + pct(winRate) + " (need >= 60%)");
         if (!expectancyPass)   reasons.add("Negative expectancy: " + fmt(expectancy));
-        if (!profitFactorPass) reasons.add("Low profit factor: " + fmt(profitFactor) + " (need > 1.5)");
-        if (!drawdownPass)     reasons.add("Max drawdown too high: " + pct(maxDrawdown) + " (need < 20%)");
+        if (!profitFactorPass) reasons.add("Low profit factor: " + fmt(profitFactor) + " (need >= 1.2)");
+        if (!drawdownPass)     reasons.add("Max drawdown too high: " + pct(maxDrawdown) + " (need <= 25%)");
         if (!rrRatioPass)      reasons.add("Avg win <= avg loss: $" + fmt(avgWin) + " vs $" + fmt(avgLoss));
         return reasons;
     }

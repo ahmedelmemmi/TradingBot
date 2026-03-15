@@ -15,7 +15,7 @@ class BacktestValidationServiceTest {
 
     @Test
     void validationPassesWithSufficientPositiveData() {
-        List<Position> closed = buildPositions(35, 50.0, 30.0, 0.6);
+        List<Position> closed = buildPositions(10, 50.0, 30.0, 0.6);
         List<BigDecimal> curve = buildEquityCurve(10_000, 11_500);
         BigDecimal start = BigDecimal.valueOf(10_000);
 
@@ -28,13 +28,13 @@ class BacktestValidationServiceTest {
 
     @Test
     void validationFailsWithInsufficientTrades() {
-        List<Position> closed = buildPositions(10, 50.0, 30.0, 0.6);
+        List<Position> closed = buildPositions(3, 50.0, 30.0, 0.6);
         List<BigDecimal> curve = buildEquityCurve(10_000, 10_500);
         BigDecimal start = BigDecimal.valueOf(10_000);
 
         BacktestValidationResult result = service.validate(closed, curve, start);
 
-        assertFalse(result.isTradeCountPass(), "Should fail with only 10 trades");
+        assertFalse(result.isTradeCountPass(), "Should fail with only 3 trades (need >= 5)");
         assertFalse(result.isValid(),          "Overall validation should fail");
         assertFalse(result.getFailureReasons().isEmpty(), "Should have failure reasons");
     }

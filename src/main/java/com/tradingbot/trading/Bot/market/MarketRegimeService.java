@@ -22,8 +22,11 @@ public class MarketRegimeService {
     /** Number of consecutive bars a non-crash regime must hold before confirming. */
     private static final int REGIME_PERSISTENCE_COUNT = 5;
 
-    /** MA20/MA50 slope must exceed this value (3%) for STRONG_UPTREND classification. */
-    public static final double STRONG_UPTREND_SLOPE_THRESHOLD = 0.03;
+    /** MA20/MA50 slope must exceed this value (1%) for STRONG_UPTREND classification.
+     *  Lowered from 3% to 1% so real daily market data (e.g. SPY in a bull market,
+     *  ~0.1%/day ≈ 25% annual) can be correctly classified as STRONG_UPTREND.
+     *  Mock data still passes easily (slope ≈ 4-5% per its 0.3%/bar trend). */
+    public static final double STRONG_UPTREND_SLOPE_THRESHOLD = 0.01;
 
     /** Average bar range (High-Low)/Close must exceed this (2.5%) for HIGH_VOLATILITY. */
     public static final double HIGH_VOLATILITY_RANGE_THRESHOLD = 0.025;
