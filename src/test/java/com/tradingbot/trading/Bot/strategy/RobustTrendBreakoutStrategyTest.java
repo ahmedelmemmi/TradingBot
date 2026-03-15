@@ -44,10 +44,10 @@ class RobustTrendBreakoutStrategyTest {
 
     @Test
     void returnsHoldAtBoundaryOf59Candles() {
-        // 59 candles — one below MIN_CANDLES (boundary check)
+        // 59 candles — well below MIN_CANDLES (boundary check)
         List<Candle> candles = generateCandles(59, 100.0, 0.5, 100_000);
         assertEquals(TradingSignal.HOLD, strategy.evaluate(candles),
-                "Should return HOLD at exactly 59 candles (MIN_CANDLES is 60)");
+                "Should return HOLD at exactly 59 candles (MIN_CANDLES is 61)");
     }
 
     // ── Condition 1: uptrend ──────────────────────────────────────────────────
@@ -86,18 +86,28 @@ class RobustTrendBreakoutStrategyTest {
 
     @Test
     void returnsBuyWhenCloseConfirmsBreakout() {
-        List<Candle> candles = buildBreakoutSequence(true, true);
+        // Two consecutive breakout bars are required (condition 4: 2-bar confirmation).
+        List<Candle> candles = buildBreakoutSequence(true, true, 2);
         TradingSignal last = evaluateIncrementally(strategy, candles);
         assertEquals(TradingSignal.BUY, last,
-                "Close above breakout level in an uptrend should produce BUY");
+                "Close above breakout level for 2 consecutive bars in an uptrend should produce BUY");
     }
 
-    // ── Condition 4: volume confirmation ─────────────────────────────────────
+    @Test
+    void returnsHoldWhenOnlyOneBreakooutBarEvenIfCloseAboveLevel() {
+        // Only 1 breakout bar — fails condition 4 (2-bar confirmation required)
+        List<Candle> candles = buildBreakoutSequence(true, true, 1);
+        TradingSignal last = evaluateIncrementally(strategy, candles);
+        assertEquals(TradingSignal.HOLD, last,
+                "Single-bar breakout must be rejected (2 consecutive closes required)");
+    }
+
+    // ── Condition 5: volume confirmation ─────────────────────────────────────
 
     @Test
     void returnsHoldWhenBreakoutVolumeIsBelowAverage() {
+        // Two breakout bars, but current (second) bar volume 80k < 1.2 × avg (200k) → HOLD
         List<Candle> candles = buildBreakoutSequenceWithVolume(true, true, 80_000L, 200_000L);
-        // breakout bar volume (80k) < 1.1 × avg (200k) → should return HOLD
         TradingSignal last = evaluateIncrementally(strategy, candles);
         assertEquals(TradingSignal.HOLD, last,
                 "Breakout on below-average volume must be rejected");
@@ -105,8 +115,8 @@ class RobustTrendBreakoutStrategyTest {
 
     @Test
     void returnsBuyWhenBreakoutVolumeIsAboveAverage() {
+        // Two breakout bars, current bar volume (250k) > 1.2 × avg (150k) → BUY
         List<Candle> candles = buildBreakoutSequenceWithVolume(true, true, 250_000L, 150_000L);
-        // breakout bar volume (250k) > 1.1 × avg (150k) → should return BUY
         TradingSignal last = evaluateIncrementally(strategy, candles);
         assertEquals(TradingSignal.BUY, last,
                 "Breakout on above-average volume in an uptrend should produce BUY");
@@ -122,15 +132,34 @@ class RobustTrendBreakoutStrategyTest {
     // ── Helper: build a breakout candle sequence ──────────────────────────────
 
     /**
+     * Builds a candle sequence with a single breakout bar (for testing that a
+     * single-bar breakout is rejected by the 2-bar confirmation requirement).
+     */
+    private List<Candle> buildBreakoutSequence(boolean closeBreaksOut,
+                                                boolean highBreaksOut) {
+        return buildBreakoutSequence(closeBreaksOut, highBreaksOut, 1);
+    }
+
+    /**
      * Builds a candle sequence:
      * <ol>
      *   <li>70 bars of strong uptrend (ensures MA20 &gt; MA50 and RSI &gt; 50).</li>
      *   <li>20 flat bars (sets the 20-bar reference high).</li>
-     *   <li>1 breakout bar with close / high controlled by parameters.</li>
+     *   <li>{@code breakoutBarCount} breakout bars with close / high controlled by parameters.</li>
      * </ol>
+     *
+     * <p>For the 2-bar case the breakout bars are constructed so that both closes are
+     * above their respective N-bar breakout levels: the first bar's high is kept close
+     * to its close (preventing it from inflating the second bar's reference high), and
+     * the second bar's close is set above the elevated reference level.</p>
+     *
+     * @param closeBreaksOut whether the breakout bars close above the breakout level
+     * @param highBreaksOut  whether the breakout bars' high is above the breakout level
+     * @param breakoutBarCount number of consecutive breakout bars to append (1 or 2+)
      */
     private List<Candle> buildBreakoutSequence(boolean closeBreaksOut,
-                                                boolean highBreaksOut) {
+                                                boolean highBreaksOut,
+                                                int breakoutBarCount) {
         List<Candle> candles = new ArrayList<>();
         LocalDateTime t = LocalDateTime.now();
 
@@ -152,32 +181,42 @@ class RobustTrendBreakoutStrategyTest {
         }
 
         // The 20-bar highest high is refBase + 0.5.
-        // Breakout level = (refBase + 0.5) * (1 + BREAKOUT_BUFFER_PCT)
-        double breakoutLevel = (refBase + 0.5)
+        // Initial breakout level = (refBase + 0.5) * (1 + BREAKOUT_BUFFER_PCT)
+        double initialBreakoutLevel = (refBase + 0.5)
                 * (1.0 + RobustTrendBreakoutStrategy.BREAKOUT_BUFFER_PCT);
 
-        double closePrice = closeBreaksOut
-                ? breakoutLevel + 0.5   // close clearly above breakout level
-                : breakoutLevel - 0.1;  // close just below breakout level
+        // Phase 3: breakoutBarCount breakout bars.
+        // Each bar's close is above its breakout level; its high is only slightly
+        // above its close so that the next bar's reference high is not inflated
+        // beyond reach.
+        double currentBreakoutLevel = initialBreakoutLevel;
+        for (int b = 0; b < breakoutBarCount; b++) {
+            double barClose = closeBreaksOut
+                    ? currentBreakoutLevel + 0.5   // clearly above level
+                    : initialBreakoutLevel - 0.1;  // below level (first bar only)
+            double barHigh = highBreaksOut
+                    ? barClose + 0.1               // just above close to keep reference tight
+                    : refBase + 0.1;
 
-        double highPrice = highBreaksOut
-                ? breakoutLevel + 1.0   // high well above breakout level
-                : refBase + 0.1;        // high does not reach the level
+            candles.add(new Candle("T", t.plusMinutes(90 + b),
+                    bd(refBase - 0.1),
+                    bd(barHigh),
+                    bd(refBase - 0.3),
+                    bd(barClose),
+                    200_000L));
 
-        // Phase 3: breakout bar
-        candles.add(new Candle("T", t.plusMinutes(90),
-                bd(refBase - 0.1),
-                bd(highPrice),
-                bd(refBase - 0.3),
-                bd(closePrice),
-                200_000L));
+            // For the next bar, the reference high is now barHigh.
+            // Next breakout level = barHigh * (1 + buffer)
+            currentBreakoutLevel = barHigh * (1.0 + RobustTrendBreakoutStrategy.BREAKOUT_BUFFER_PCT);
+        }
 
         return candles;
     }
 
     /**
-     * Builds a breakout sequence with configurable volume: the uptrend and
-     * flat bars use {@code avgVolume} and the breakout bar uses {@code breakoutVolume}.
+     * Builds a breakout sequence with configurable volume for 2-bar confirmation:
+     * - Prior breakout bar closes above the initial breakout level (uses avgVolume)
+     * - Current breakout bar closes above the elevated breakout level (uses breakoutVolume)
      */
     private List<Candle> buildBreakoutSequenceWithVolume(boolean closeBreaksOut,
                                                           boolean highBreaksOut,
@@ -203,14 +242,25 @@ class RobustTrendBreakoutStrategyTest {
                     avgVolume));
         }
 
-        double breakoutLevel = (refBase + 0.5)
+        double initialBreakoutLevel = (refBase + 0.5)
                 * (1.0 + RobustTrendBreakoutStrategy.BREAKOUT_BUFFER_PCT);
-        double closePrice = closeBreaksOut ? breakoutLevel + 0.5 : breakoutLevel - 0.1;
-        double highPrice  = highBreaksOut  ? breakoutLevel + 1.0 : refBase + 0.1;
+        double bo1Close = closeBreaksOut ? initialBreakoutLevel + 0.5 : initialBreakoutLevel - 0.1;
+        // Keep high just above close so next bar's reference isn't inflated out of reach
+        double bo1High  = highBreaksOut  ? bo1Close + 0.1 : refBase + 0.1;
 
-        // Phase 3: breakout bar with specified volume
+        // Phase 3a: prior breakout bar (enables 2-bar confirmation) — uses avgVolume
         candles.add(new Candle("T", t.plusMinutes(90),
-                bd(refBase - 0.1), bd(highPrice), bd(refBase - 0.3), bd(closePrice),
+                bd(refBase - 0.1), bd(bo1High), bd(refBase - 0.3), bd(bo1Close),
+                avgVolume));
+
+        // Phase 3b: current breakout bar — uses breakoutVolume.
+        // Its breakout level is based on bar 3a's high.
+        double elevatedBreakoutLevel = bo1High * (1.0 + RobustTrendBreakoutStrategy.BREAKOUT_BUFFER_PCT);
+        double bo2Close = closeBreaksOut ? elevatedBreakoutLevel + 0.5 : initialBreakoutLevel - 0.1;
+        double bo2High  = highBreaksOut  ? bo2Close + 0.1 : refBase + 0.1;
+
+        candles.add(new Candle("T", t.plusMinutes(91),
+                bd(refBase - 0.1), bd(bo2High), bd(refBase - 0.3), bd(bo2Close),
                 breakoutVolume));
 
         return candles;
@@ -227,8 +277,8 @@ class RobustTrendBreakoutStrategyTest {
         LocalDateTime t = LocalDateTime.now();
 
         // Use a very gentle drift (0.004/bar) so the MA20/MA50 ratio stays well below
-        // the MIN_MA_RATIO_PCT (0.3%) threshold.
-        // After 70 bars: MA20 ≈ 100.13, MA50 ≈ 100.04 → ratio ≈ 0.09% < 0.3% → HOLD
+        // the MIN_MA_RATIO_PCT (0.5%) threshold.
+        // After 70 bars: MA20 ≈ 100.13, MA50 ≈ 100.04 → ratio ≈ 0.09% < 0.5% → HOLD
         double price = 100.0;
         for (int i = 0; i < 70; i++) {
             price += 0.004;

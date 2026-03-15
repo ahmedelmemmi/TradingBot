@@ -11,16 +11,19 @@ import java.util.List;
  * Robust Trend Breakout Strategy — the single active strategy for this bot.
  *
  * <p>Designed to work on real daily market data (Yahoo Finance, live feeds).
- * Five conditions must ALL be met for a BUY signal:</p>
+ * Six conditions must ALL be met for a BUY signal:</p>
  *
  * <ol>
  *   <li><b>Uptrend:</b> MA20 &gt; MA50 — price is in a rising trend.</li>
  *   <li><b>Trend strength:</b> MA20 is at least {@value #MIN_MA_RATIO_PCT}% above MA50 —
  *       filters weak/marginal crossovers that quickly reverse.</li>
- *   <li><b>Breakout:</b> Bar <em>close</em> &gt; highest high of the prior
+ *   <li><b>Breakout (current bar):</b> Current bar <em>close</em> &gt; highest high of the prior
  *       {@value #BREAKOUT_PERIOD} bars + {@value #BREAKOUT_BUFFER_PCT}% buffer.
  *       Uses the close (not the intraday high) to reject false breakouts that
  *       spike through the level intraday then reverse.</li>
+ *   <li><b>Breakout confirmation (prior bar):</b> The <em>previous</em> bar also closed above
+ *       the breakout level — requiring 2 consecutive closes above resistance filters
+ *       single-bar false breakouts that quickly reverse.</li>
  *   <li><b>Volume confirmation:</b> Current bar volume &gt; {@value #VOLUME_RATIO_MIN}×
  *       the {@value #VOLUME_AVG_PERIOD}-bar average — breakout must be backed by above-average
  *       participation to filter false breakouts on thin volume.</li>
@@ -42,8 +45,8 @@ import java.util.List;
 @Service
 public class RobustTrendBreakoutStrategy implements Strategy {
 
-    /** Minimum number of candles needed for MA50 + RSI(14). */
-    public static final int MIN_CANDLES = 60;
+    /** Minimum number of candles needed for MA50 + RSI(14) + 2-bar confirmation. */
+    public static final int MIN_CANDLES = 61;
 
     /** Lookback period for the breakout high (prior bars, excluding current). */
     public static final int BREAKOUT_PERIOD = 20;
@@ -59,19 +62,18 @@ public class RobustTrendBreakoutStrategy implements Strategy {
     public static final double RSI_MIN = 50.0;
 
     /**
-     * Minimum ratio: (MA20 - MA50) / MA50 must be at least this fraction (0.3%).
-     * Filters marginal crossovers where MA20 barely exceeds MA50 and quickly
-     * reverses — these produce a large share of losing trades.
+     * Minimum ratio: (MA20 - MA50) / MA50 must be at least this fraction (0.5%).
+     * Increased from 0.3% to 0.5% to filter marginal uptrends that frequently
+     * produce false breakouts and revert within a few bars.
      */
-    public static final double MIN_MA_RATIO_PCT = 0.003;
+    public static final double MIN_MA_RATIO_PCT = 0.005;
 
     /**
-     * Breakout bar volume must be at least this multiple of the N-bar average (1.1×).
-     * Breakouts with below-average volume are frequently false breakouts that
-     * reverse within 1–3 bars; requiring above-average volume significantly
-     * improves win rate at the cost of slightly fewer trade signals.
+     * Breakout bar volume must be at least this multiple of the N-bar average (1.2×).
+     * Increased from 1.1× to 1.2× — stronger volume confirmation reduces false
+     * breakouts on thin volume which are a primary source of losing trades.
      */
-    public static final double VOLUME_RATIO_MIN = 1.1;
+    public static final double VOLUME_RATIO_MIN = 1.2;
 
     /** Look-back window for the average volume calculation (bars). */
     public static final int VOLUME_AVG_PERIOD = 20;
@@ -124,7 +126,7 @@ public class RobustTrendBreakoutStrategy implements Strategy {
         System.out.println("[RobustBreakout] ✓ Uptrend: MA20(" + fmt(ma20)
                 + ") > MA50(" + fmt(ma50) + ") ratio=" + fmt(maRatio));
 
-        // ── Condition 3: BREAKOUT — close > N-bar high + buffer ───────────────
+        // ── Condition 3: BREAKOUT — current bar close > N-bar high + buffer ───
         BigDecimal nBarHigh = highestHigh(candles, BREAKOUT_PERIOD);
         BigDecimal breakoutLevel = nBarHigh.multiply(
                 BigDecimal.ONE.add(BigDecimal.valueOf(BREAKOUT_BUFFER_PCT)));
@@ -139,7 +141,27 @@ public class RobustTrendBreakoutStrategy implements Strategy {
         }
         System.out.println("[RobustBreakout] ✓ Breakout confirmed (close above level)");
 
-        // ── Condition 4: VOLUME CONFIRMATION — above-average volume ───────────
+        // ── Condition 4: PRIOR BAR BREAKOUT CONFIRMATION (2 consecutive closes) ─
+        // Require that the previous bar ALSO closed above the breakout level
+        // (computed for the prior bar's lookahead). A single-bar spike that closes
+        // above resistance is frequently a false breakout that reverses within 1–3
+        // bars; requiring two consecutive closes above the level dramatically
+        // improves signal quality.
+        List<Candle> priorSubset = candles.subList(0, candles.size() - 1);
+        BigDecimal priorClose = priorSubset.get(priorSubset.size() - 1).getClose();
+        BigDecimal priorNBarHigh = highestHigh(priorSubset, BREAKOUT_PERIOD);
+        BigDecimal priorBreakoutLevel = priorNBarHigh.multiply(
+                BigDecimal.ONE.add(BigDecimal.valueOf(BREAKOUT_BUFFER_PCT)));
+
+        if (priorClose.compareTo(priorBreakoutLevel) <= 0) {
+            System.out.println("[RobustBreakout] HOLD: Prior bar close (" + fmt(priorClose)
+                    + ") did not confirm breakout (" + fmt(priorBreakoutLevel)
+                    + ") — single-bar breakouts rejected");
+            return TradingSignal.HOLD;
+        }
+        System.out.println("[RobustBreakout] ✓ Prior bar confirms breakout (2 consecutive closes)");
+
+        // ── Condition 5: VOLUME CONFIRMATION — above-average volume ───────────
         // False breakouts on thin volume are a primary source of losing trades.
         long avgVolume     = averageVolume(candles, VOLUME_AVG_PERIOD);
         long currentVolume = current.getVolume();
@@ -154,7 +176,7 @@ public class RobustTrendBreakoutStrategy implements Strategy {
             System.out.println("[RobustBreakout] ✓ Volume confirmed (ratio=" + String.format("%.2f", volRatio) + ")");
         }
 
-        // ── Condition 5: RSI MOMENTUM > 50 ────────────────────────────────────
+        // ── Condition 6: RSI MOMENTUM > 50 ────────────────────────────────────
         BigDecimal rsi = rsiCalculator.calculate(candles);
 
         System.out.println("[RobustBreakout] RSI: " + fmt(rsi) + " (min: " + RSI_MIN + ")");
