@@ -17,6 +17,10 @@ import java.util.List;
  * <p>Regime detection is performed inline (MA20/MA50 slope + 10-bar momentum) rather than
  * via the shared, stateful {@link com.tradingbot.trading.Bot.market.MarketRegimeService},
  * so each instance uses its own configurable slope threshold without side-effects.</p>
+ *
+ * <p>Breakout confirmation uses the bar's <em>close</em> price (not the intraday high),
+ * consistent with {@link SimplifiedBreakoutStrategy}, to filter false breakouts where price
+ * briefly touches the level intraday but reverses before the close.</p>
  */
 public class TunedBreakoutStrategy implements Strategy {
 
@@ -90,8 +94,7 @@ public class TunedBreakoutStrategy implements Strategy {
         }
 
         Candle current = candles.get(candles.size() - 1);
-        BigDecimal price   = current.getClose();
-        BigDecimal barHigh = current.getHigh();
+        BigDecimal price = current.getClose();
 
         // ── Condition 1: Inline STRONG_UPTREND detection ──────────────────────
         if (!isStrongUptrend(candles)) {
@@ -122,10 +125,12 @@ public class TunedBreakoutStrategy implements Strategy {
         }
 
         // ── Condition 4: Price breakout above 5-bar high + buffer ─────────────
+        // Uses the bar's CLOSE (not the intraday high) so that only genuine
+        // close-confirmed breakouts generate a signal.
         BigDecimal highest5      = getHighestHigh(candles, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
         BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(breakoutBuffer));
 
-        if (barHigh.compareTo(breakoutLevel) <= 0) {
+        if (price.compareTo(breakoutLevel) <= 0) {
             return TradingSignal.HOLD;
         }
 
