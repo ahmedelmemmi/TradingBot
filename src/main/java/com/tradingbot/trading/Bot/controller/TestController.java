@@ -39,6 +39,9 @@ public class TestController {
     /** Maximum candle count fetched by real-data diagnostic endpoints. */
     private static final int MAX_CANDLES_FOR_DIAGNOSTICS = 1000;
 
+    /** Maximum candle count fetched per symbol in multi-symbol real data backtests. */
+    private static final int MAX_CANDLES_FOR_BACKTEST = 1000;
+
     private final MockMarketDataService marketDataService;
     private final RsiStrategyService rsiStrategyService;
     private final PerfectBreakoutStrategy perfectBreakoutStrategy;
@@ -1866,6 +1869,142 @@ public class TestController {
             sum = sum.add(candles.get(i).getClose());
         }
         return sum.divide(BigDecimal.valueOf(period), 6, RoundingMode.HALF_UP);
+    }
+
+    /*
+    ======================================================
+    ✅ MULTI-SYMBOL REAL DATA BACKTEST
+    Runs SimplifiedBreakoutStrategy against real Yahoo Finance
+    daily data for all 13 quality-backtest symbols.
+
+    Symbols: SPY, QQQ, AAPL, MSFT, NVDA, GOOG, AMZN, META,
+             TSLA, IWM, XLF, XLE, XLV
+
+    Date range: 2022-01-01 → 2024-03-14 (~2.25 years)
+
+    Returns per-symbol metrics and an aggregated summary.
+
+    Validation thresholds (per symbol):
+      Win rate:      ≥ 50%
+      Profit factor: ≥ 1.0
+      Max drawdown:  ≤ 30%
+    ======================================================
+     */
+    @GetMapping("/backtest/real/multi")
+    public Map<String, Object> backtestRealMultiSymbol() {
+
+        final List<String> SYMBOLS = List.of(
+                "SPY", "QQQ", "AAPL", "MSFT", "NVDA",
+                "GOOG", "AMZN", "META", "TSLA",
+                "IWM", "XLF", "XLE", "XLV"
+        );
+
+        final LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        final LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("MULTI-SYMBOL REAL DATA BACKTEST (" + SYMBOLS.size() + " symbols)");
+        System.out.println("Date range: " + from + " → " + to);
+        System.out.println("Strategy:   " + simplifiedBreakoutStrategy.getName());
+        System.out.println("=".repeat(80));
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("provider",   yahooFinanceMarketDataProvider.getProviderName());
+        response.put("strategy",   simplifiedBreakoutStrategy.getName());
+        response.put("dateFrom",   from.toString());
+        response.put("dateTo",     to.toString());
+        response.put("symbols",    SYMBOLS);
+
+        List<Map<String, Object>> symbolResults = new ArrayList<>();
+
+        int passCount  = 0;
+        int totalCount = 0;
+
+        for (String symbol : SYMBOLS) {
+            System.out.println("\n--- Backtesting " + symbol + " ---");
+
+            List<Candle> candles = yahooFinanceMarketDataProvider.getCandles(
+                    symbol, MAX_CANDLES_FOR_BACKTEST, from, to);
+
+            Map<String, Object> symbolResult = new LinkedHashMap<>();
+            symbolResult.put("symbol",       symbol);
+            symbolResult.put("totalCandles", candles.size());
+
+            if (candles.isEmpty()) {
+                symbolResult.put("status", "ERROR");
+                symbolResult.put("error",  "No data downloaded from Yahoo Finance");
+                symbolResults.add(symbolResult);
+                totalCount++;
+                continue;
+            }
+
+            BacktestResult result = backtestEngine.runStrategy(
+                    symbol, candles, simplifiedBreakoutStrategy);
+
+            boolean winRatePass     = result.getWinRate()
+                    .compareTo(BigDecimal.valueOf(0.50)) >= 0;
+            boolean profitFactorPass = result.getProfitFactor()
+                    .compareTo(BigDecimal.ONE) >= 0;
+            boolean drawdownPass    = result.getMaxDrawdown()
+                    .compareTo(BigDecimal.valueOf(0.30)) <= 0;
+            boolean tradeCountPass  = result.getTotalTrades() >= 1;
+            boolean allPass = winRatePass && profitFactorPass && drawdownPass && tradeCountPass;
+
+            symbolResult.put("totalTrades",   result.getTotalTrades());
+            symbolResult.put("winningTrades", result.getWinningTrades());
+            symbolResult.put("losingTrades",  result.getLosingTrades());
+            symbolResult.put("winRate",       result.getWinRate());
+            symbolResult.put("profitFactor",  result.getProfitFactor());
+            symbolResult.put("totalPnL",      result.getTotalPnL());
+            symbolResult.put("startCapital",  result.getStartingCapital());
+            symbolResult.put("endCapital",    result.getEndingCapital());
+            symbolResult.put("maxDrawdown",   result.getMaxDrawdown());
+            symbolResult.put("expectancy",    result.getExpectancy());
+
+            Map<String, Object> validation = new LinkedHashMap<>();
+            validation.put("winRate_pass",      winRatePass     + " (≥50%)");
+            validation.put("profitFactor_pass", profitFactorPass + " (≥1.0)");
+            validation.put("drawdown_pass",     drawdownPass    + " (≤30%)");
+            validation.put("tradeCount_pass",   tradeCountPass  + " (≥1 trade)");
+            validation.put("overall",           allPass ? "✅ PASS" : "⚠️ FAIL");
+            symbolResult.put("validation", validation);
+
+            symbolResult.put("status", allPass ? "PASS" : "FAIL");
+
+            if (allPass) passCount++;
+            totalCount++;
+
+            symbolResults.add(symbolResult);
+
+            System.out.println("[MultiBacktest] " + symbol
+                    + "  trades=" + result.getTotalTrades()
+                    + "  winRate=" + result.getWinRate()
+                    + "  pf=" + result.getProfitFactor()
+                    + "  dd=" + result.getMaxDrawdown()
+                    + "  status=" + (allPass ? "PASS" : "FAIL"));
+        }
+
+        response.put("results", symbolResults);
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("symbolsTested",  totalCount);
+        summary.put("symbolsPassed",  passCount);
+        summary.put("symbolsFailed",  totalCount - passCount);
+        summary.put("passRate",       totalCount == 0 ? "N/A"
+                : BigDecimal.valueOf(passCount)
+                .divide(BigDecimal.valueOf(totalCount), 4, RoundingMode.HALF_UP)
+                .toPlainString());
+        summary.put("overall", passCount == totalCount
+                ? "✅ ALL SYMBOLS PASSED"
+                : "⚠️ " + (totalCount - passCount) + " SYMBOL(S) FAILED");
+        response.put("summary", summary);
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("MULTI-SYMBOL BACKTEST COMPLETE");
+        System.out.println("Passed: " + passCount + " / " + totalCount);
+        System.out.println("=".repeat(80) + "\n");
+
+        return response;
     }
 
 }
