@@ -21,8 +21,10 @@ import java.util.List;
  *   <li><b>Volatility spike:</b> ATR(14) &gt; {@value #VOLATILITY_THRESHOLD_PCT}% of price.</li>
  *   <li><b>Volume above average:</b> Current bar volume &gt; {@value #MIN_VOLUME_RATIO_PCT}%
  *       of the 20-bar average (no dry-up requirement).</li>
- *   <li><b>Price breakout:</b> Bar high &gt; highest high of the prior {@value #BREAKOUT_PERIOD}
- *       bars + 0.05% buffer.</li>
+ *   <li><b>Price breakout:</b> Bar <em>close</em> &gt; highest high of the prior
+ *       {@value #BREAKOUT_PERIOD} bars + 0.05% buffer. Using the close (not the intraday
+ *       high) filters false breakouts where price spikes through the level intraday but
+ *       then reverses and closes below it.</li>
  *   <li><b>RSI positive momentum:</b> RSI(14) &gt; 50.</li>
  * </ol>
  */
@@ -38,7 +40,11 @@ public class SimplifiedBreakoutStrategy implements Strategy {
     /** Look-back period for the breakout high (5 bars). */
     public static final int BREAKOUT_PERIOD = 5;
 
-    /** Multiplier applied to the 5-bar high to confirm the breakout (0.05% buffer → 1.0005). */
+    /**
+     * Multiplier applied to the 5-bar high to confirm the breakout (0.05% buffer → 1.0005).
+     * The breakout is confirmed when the bar's <em>close</em> (not the intraday high) exceeds
+     * this level, filtering intraday false breakouts that reverse before the close.
+     */
     public static final double BREAKOUT_BUFFER = 1.0005;
 
     /** RSI must be above this level to confirm positive momentum. */
@@ -73,8 +79,7 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         }
 
         Candle current = candles.get(candles.size() - 1);
-        BigDecimal price   = current.getClose();
-        BigDecimal barHigh = current.getHigh();
+        BigDecimal price = current.getClose();
 
         // ── Condition 1: REGIME (STRONG_UPTREND only) ─────────────────────────
         MarketRegime regime = regimeService.detect(candles);
@@ -116,18 +121,21 @@ public class SimplifiedBreakoutStrategy implements Strategy {
         }
         System.out.println("  → PASS: Volume above average");
 
-        // ── Condition 4: PRICE BREAKOUT (above 5-bar high + 0.05% buffer) ─────
+        // ── Condition 4: PRICE BREAKOUT (close above 5-bar high + 0.05% buffer) ──
+        // Uses the bar's CLOSE (not the intraday high) to confirm the breakout.
+        // A bar that spikes through the level intraday but closes below it is a
+        // false breakout / rejection — we do not enter on those.
         BigDecimal highest5 = getHighestHigh(candles, BREAKOUT_PERIOD);
         BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(BREAKOUT_BUFFER));
 
-        System.out.println("[SimplifiedBreakout] Bar high: " + fmt(barHigh)
+        System.out.println("[SimplifiedBreakout] Close: " + fmt(price)
                 + " vs breakout: " + fmt(breakoutLevel));
 
-        if (barHigh.compareTo(breakoutLevel) <= 0) {
-            System.out.println("  → REJECT: No price breakout");
+        if (price.compareTo(breakoutLevel) <= 0) {
+            System.out.println("  → REJECT: Close did not confirm breakout");
             return TradingSignal.HOLD;
         }
-        System.out.println("  → PASS: Price breakout confirmed");
+        System.out.println("  → PASS: Price breakout confirmed (close above level)");
 
         // ── Condition 5: RSI POSITIVE MOMENTUM (>50) ──────────────────────────
         BigDecimal rsi = rsiCalculator.calculate(candles);
