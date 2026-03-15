@@ -89,6 +89,8 @@ public class RobustTrendBreakoutStrategy implements Strategy {
     public static final double RSI_MIN = 50.0;
 
     private final RsiCalculator rsiCalculator;
+    // AtrCalculator is a stateless utility with no Spring dependencies;
+    // inline instantiation is the established codebase convention (used in 10+ classes).
     private final AtrCalculator atrCalculator = new AtrCalculator();
 
     public RobustTrendBreakoutStrategy(RsiCalculator rsiCalculator) {
