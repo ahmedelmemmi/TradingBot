@@ -14,10 +14,12 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for {@link RobustTrendBreakoutStrategy}.
  *
- * <p>Verifies the three conditions:</p>
+ * <p>Verifies all five conditions:</p>
  * <ol>
  *   <li>MA20 &gt; MA50 (uptrend)</li>
+ *   <li>(MA20−MA50)/MA50 &ge; MIN_MA_RATIO_PCT (trend strength)</li>
  *   <li>Close &gt; 20-bar highest high + 0.1% buffer (breakout)</li>
+ *   <li>Volume &ge; VOLUME_RATIO_MIN × 20-bar average (volume confirmation)</li>
  *   <li>RSI(14) &gt; 50 (momentum)</li>
  * </ol>
  */
@@ -60,7 +62,19 @@ class RobustTrendBreakoutStrategyTest {
                 "Flat market should produce HOLD (no uptrend)");
     }
 
-    // ── Condition 2: breakout uses close, not high ────────────────────────────
+    // ── Condition 2: trend strength ───────────────────────────────────────────
+
+    @Test
+    void returnsHoldWhenTrendTooWeak() {
+        // Build candles where MA20 is just barely above MA50 (less than MIN_MA_RATIO_PCT)
+        // Use a very gentle trend so MA20 ≈ MA50
+        List<Candle> candles = buildWeakUptrendBreakout();
+        TradingSignal last = evaluateIncrementally(strategy, candles);
+        assertEquals(TradingSignal.HOLD, last,
+                "MA20 barely above MA50 (weak trend) must produce HOLD");
+    }
+
+    // ── Condition 3: breakout uses close, not high ────────────────────────────
 
     @Test
     void returnsHoldWhenHighAboveBreakoutButCloseBelowIt() {
@@ -76,6 +90,26 @@ class RobustTrendBreakoutStrategyTest {
         TradingSignal last = evaluateIncrementally(strategy, candles);
         assertEquals(TradingSignal.BUY, last,
                 "Close above breakout level in an uptrend should produce BUY");
+    }
+
+    // ── Condition 4: volume confirmation ─────────────────────────────────────
+
+    @Test
+    void returnsHoldWhenBreakoutVolumeIsBelowAverage() {
+        List<Candle> candles = buildBreakoutSequenceWithVolume(true, true, 80_000L, 200_000L);
+        // breakout bar volume (80k) < 1.1 × avg (200k) → should return HOLD
+        TradingSignal last = evaluateIncrementally(strategy, candles);
+        assertEquals(TradingSignal.HOLD, last,
+                "Breakout on below-average volume must be rejected");
+    }
+
+    @Test
+    void returnsBuyWhenBreakoutVolumeIsAboveAverage() {
+        List<Candle> candles = buildBreakoutSequenceWithVolume(true, true, 250_000L, 150_000L);
+        // breakout bar volume (250k) > 1.1 × avg (150k) → should return BUY
+        TradingSignal last = evaluateIncrementally(strategy, candles);
+        assertEquals(TradingSignal.BUY, last,
+                "Breakout on above-average volume in an uptrend should produce BUY");
     }
 
     // ── Strategy name ─────────────────────────────────────────────────────────
@@ -137,6 +171,87 @@ class RobustTrendBreakoutStrategyTest {
                 bd(refBase - 0.3),
                 bd(closePrice),
                 200_000L));
+
+        return candles;
+    }
+
+    /**
+     * Builds a breakout sequence with configurable volume: the uptrend and
+     * flat bars use {@code avgVolume} and the breakout bar uses {@code breakoutVolume}.
+     */
+    private List<Candle> buildBreakoutSequenceWithVolume(boolean closeBreaksOut,
+                                                          boolean highBreaksOut,
+                                                          long breakoutVolume,
+                                                          long avgVolume) {
+        List<Candle> candles = new ArrayList<>();
+        LocalDateTime t = LocalDateTime.now();
+
+        // Phase 1: 70 bars of strong uptrend → MA20 > MA50, trend strength ok, RSI > 50
+        double price = 100.0;
+        for (int i = 0; i < 70; i++) {
+            price += 0.5;
+            candles.add(new Candle("T", t.plusMinutes(i),
+                    bd(price - 0.5), bd(price + 0.8), bd(price - 0.8), bd(price),
+                    avgVolume));
+        }
+
+        // Phase 2: 20 flat bars to set the 20-bar reference high
+        double refBase = price;
+        for (int i = 0; i < 20; i++) {
+            candles.add(new Candle("T", t.plusMinutes(70 + i),
+                    bd(refBase - 0.3), bd(refBase + 0.5), bd(refBase - 0.5), bd(refBase),
+                    avgVolume));
+        }
+
+        double breakoutLevel = (refBase + 0.5)
+                * (1.0 + RobustTrendBreakoutStrategy.BREAKOUT_BUFFER_PCT);
+        double closePrice = closeBreaksOut ? breakoutLevel + 0.5 : breakoutLevel - 0.1;
+        double highPrice  = highBreaksOut  ? breakoutLevel + 1.0 : refBase + 0.1;
+
+        // Phase 3: breakout bar with specified volume
+        candles.add(new Candle("T", t.plusMinutes(90),
+                bd(refBase - 0.1), bd(highPrice), bd(refBase - 0.3), bd(closePrice),
+                breakoutVolume));
+
+        return candles;
+    }
+
+    /**
+     * Builds a candle sequence where the trend is too weak to pass the
+     * MIN_MA_RATIO_PCT threshold: 50 bars of gentle uptrend (0.01/bar) then
+     * 20 flat bars and a breakout bar.  The MA ratio will be well below the
+     * required minimum so the strategy should return HOLD.
+     */
+    private List<Candle> buildWeakUptrendBreakout() {
+        List<Candle> candles = new ArrayList<>();
+        LocalDateTime t = LocalDateTime.now();
+
+        // Use a very gentle drift: after 70 bars, MA20 ≈ 100.7, MA50 ≈ 100.3
+        // ratio = (100.7 - 100.3) / 100.3 ≈ 0.004 — below MIN_MA_RATIO_PCT (0.3%)
+        // NOTE: use 0.004 to stay below 0.003 requires very gentle drift.
+        // Drift of 0.004/bar: after 50 bars from 100, close ≈ 100.2
+        // MA20 = avg of last 20 closes ≈ 100.13, MA50 = avg of last 50 ≈ 100.04
+        // ratio ≈ 0.09% < 0.3% → HOLD
+        double price = 100.0;
+        for (int i = 0; i < 70; i++) {
+            price += 0.004;
+            candles.add(new Candle("T", t.plusMinutes(i),
+                    bd(price - 0.1), bd(price + 0.2), bd(price - 0.2), bd(price),
+                    200_000L));
+        }
+
+        double refBase = price;
+        for (int i = 0; i < 20; i++) {
+            candles.add(new Candle("T", t.plusMinutes(70 + i),
+                    bd(refBase - 0.1), bd(refBase + 0.2), bd(refBase - 0.2), bd(refBase),
+                    200_000L));
+        }
+
+        double breakoutLevel = (refBase + 0.2)
+                * (1.0 + RobustTrendBreakoutStrategy.BREAKOUT_BUFFER_PCT);
+        candles.add(new Candle("T", t.plusMinutes(90),
+                bd(refBase - 0.1), bd(breakoutLevel + 1.0), bd(refBase - 0.2),
+                bd(breakoutLevel + 0.5), 300_000L));
 
         return candles;
     }

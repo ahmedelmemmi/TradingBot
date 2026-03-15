@@ -14,7 +14,7 @@ import java.util.List;
  *
  * <p>Decision tree:</p>
  * <ul>
- *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link RobustTrendBreakoutStrategy} (minimal conditions, real-data compatible)</li>
+ *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link RobustTrendBreakoutStrategy} (single active strategy)</li>
  *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link NoTradeStrategy} (preserve capital)</li>
  *   <li>{@link MarketRegime#SIDEWAYS} → {@link NoTradeStrategy} (no edge in sideways)</li>
  *   <li>{@link MarketRegime#STRONG_DOWNTREND} → {@link NoTradeStrategy} (preserve capital)</li>
@@ -25,16 +25,10 @@ import java.util.List;
 public class RegimeAwareStrategyFactory {
 
     private final RobustTrendBreakoutStrategy robustBreakout;
-    private final SimplifiedBreakoutStrategy  simplifiedBreakout;
-    private final PerfectBreakoutStrategy     perfectBreakout;
     private final NoTradeStrategy             noTrade = new NoTradeStrategy();
 
-    public RegimeAwareStrategyFactory(RobustTrendBreakoutStrategy robustBreakout,
-                                      SimplifiedBreakoutStrategy simplifiedBreakout,
-                                      PerfectBreakoutStrategy perfectBreakout) {
-        this.robustBreakout     = robustBreakout;
-        this.simplifiedBreakout = simplifiedBreakout;
-        this.perfectBreakout    = perfectBreakout;
+    public RegimeAwareStrategyFactory(RobustTrendBreakoutStrategy robustBreakout) {
+        this.robustBreakout = robustBreakout;
     }
 
     /**
@@ -68,8 +62,6 @@ public class RegimeAwareStrategyFactory {
         return getStrategy(regime).evaluate(candles);
     }
 
-    public RobustTrendBreakoutStrategy getRobustBreakoutStrategy()    { return robustBreakout; }
-    public SimplifiedBreakoutStrategy getSimplifiedBreakoutStrategy() { return simplifiedBreakout; }
-    public PerfectBreakoutStrategy getPerfectBreakoutStrategy()       { return perfectBreakout; }
-    public NoTradeStrategy getNoTradeStrategy()                       { return noTrade; }
+    public RobustTrendBreakoutStrategy getRobustBreakoutStrategy() { return robustBreakout; }
+    public NoTradeStrategy getNoTradeStrategy()                    { return noTrade; }
 }
