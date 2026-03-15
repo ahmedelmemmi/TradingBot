@@ -24,6 +24,7 @@ import com.tradingbot.trading.Bot.strategy.RsiCalculator;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
 import com.tradingbot.trading.Bot.strategy.SimplifiedBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
+import com.tradingbot.trading.Bot.strategy.RobustTrendBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TunedBreakoutStrategy;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,6 +48,7 @@ public class TestController {
     private final RsiStrategyService rsiStrategyService;
     private final PerfectBreakoutStrategy perfectBreakoutStrategy;
     private final SimplifiedBreakoutStrategy simplifiedBreakoutStrategy;
+    private final RobustTrendBreakoutStrategy robustBreakoutStrategy;
     private final TradeDecisionService tradeDecisionService;
     private final PositionManager positionManager;
     private final BacktestEngine backtestEngine;
@@ -62,6 +64,7 @@ public class TestController {
                           RsiStrategyService rsiStrategyService,
                           PerfectBreakoutStrategy perfectBreakoutStrategy,
                           SimplifiedBreakoutStrategy simplifiedBreakoutStrategy,
+                          RobustTrendBreakoutStrategy robustBreakoutStrategy,
                           TradeDecisionService tradeDecisionService,
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
@@ -77,6 +80,7 @@ public class TestController {
         this.rsiStrategyService             = rsiStrategyService;
         this.perfectBreakoutStrategy        = perfectBreakoutStrategy;
         this.simplifiedBreakoutStrategy     = simplifiedBreakoutStrategy;
+        this.robustBreakoutStrategy         = robustBreakoutStrategy;
         this.tradeDecisionService           = tradeDecisionService;
         this.positionManager                = positionManager;
         this.backtestEngine                 = backtestEngine;
@@ -669,22 +673,74 @@ public class TestController {
                 MockMarketDataService.MarketScenario.STRONG_UPTREND
         );
 
-        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, simplifiedBreakoutStrategy);
+        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, robustBreakoutStrategy);
 
         System.out.println("[UptrendOnly] ========== DONE ==========\n");
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("mode",         "uptrend-only");
         response.put("dataScenario", "STRONG_UPTREND");
-        response.put("strategy",     simplifiedBreakoutStrategy.getName());
+        response.put("strategy",     robustBreakoutStrategy.getName());
         response.put("totalCandles", candles.size());
         response.put("totalTrades",  result.getTotalTrades());
         response.put("winRate",      result.getWinRate());
+        response.put("profitFactor", result.getProfitFactor());
         response.put("totalPnL",     result.getTotalPnL());
         response.put("startCapital", result.getStartingCapital());
         response.put("endCapital",   result.getEndingCapital());
         response.put("maxDrawdown",  result.getMaxDrawdown());
-        response.put("note",         "Only trades confirmed STRONG_UPTREND — capital preserved in all other regimes");
+        response.put("note",         "RobustTrendBreakoutStrategy: MA20>MA50 + 20-bar breakout + RSI>50");
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ ROBUST BACKTEST (mock data)
+    Runs RobustTrendBreakoutStrategy on 1000 bars of
+    STRONG_UPTREND mock data. Target quality gates:
+      trade count ≥5, win rate ≥60%, profit factor ≥1.2,
+      max drawdown ≤25%
+    ======================================================
+     */
+    @GetMapping("/backtest/robust")
+    public Map<String, Object> backtestRobust() {
+
+        System.out.println("\n[Robust] ========== ROBUST STRATEGY BACKTEST (mock) ==========");
+
+        List<Candle> candles = marketDataService.generateCandles(
+                "AAPL",
+                1000,
+                MockMarketDataService.MarketScenario.STRONG_UPTREND
+        );
+
+        BacktestResult result = backtestEngine.runStrategy("AAPL", candles, robustBreakoutStrategy);
+
+        System.out.println("[Robust] ========== DONE ==========\n");
+
+        boolean tradeCountPass  = result.getTotalTrades() >= 5;
+        boolean winRatePass     = result.getWinRate().compareTo(BigDecimal.valueOf(0.60)) >= 0;
+        boolean profitFactorPass= result.getProfitFactor().compareTo(BigDecimal.valueOf(1.2)) >= 0;
+        boolean drawdownPass    = result.getMaxDrawdown().compareTo(BigDecimal.valueOf(0.25)) <= 0;
+        boolean allPass = tradeCountPass && winRatePass && profitFactorPass && drawdownPass;
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("strategy",       robustBreakoutStrategy.getName());
+        response.put("dataSource",     "mock-STRONG_UPTREND");
+        response.put("totalCandles",   candles.size());
+        response.put("totalTrades",    result.getTotalTrades());
+        response.put("winRate",        result.getWinRate());
+        response.put("profitFactor",   result.getProfitFactor());
+        response.put("totalPnL",       result.getTotalPnL());
+        response.put("startCapital",   result.getStartingCapital());
+        response.put("endCapital",     result.getEndingCapital());
+        response.put("maxDrawdown",    result.getMaxDrawdown());
+        Map<String, Object> gates = new LinkedHashMap<>();
+        gates.put("tradeCount_pass",   tradeCountPass   + " (≥5, got " + result.getTotalTrades() + ")");
+        gates.put("winRate_pass",      winRatePass     + " (≥60%)");
+        gates.put("profitFactor_pass", profitFactorPass + " (≥1.2)");
+        gates.put("drawdown_pass",     drawdownPass    + " (≤25%)");
+        gates.put("overall",           allPass ? "✅ ALL QUALITY GATES PASS" : "⚠️ SOME QUALITY GATES FAIL");
+        response.put("qualityGates",   gates);
         return response;
     }
 
@@ -697,7 +753,7 @@ public class TestController {
     volatile / downtrend / crash bars are skipped.
 
     Diagnostic logging (server console):
-      [UptrendOnly] ✅ UPTREND: Trading with SimplifiedBreakoutStrategy
+      [UptrendOnly] ✅ UPTREND: Trading with RobustTrendBreakoutStrategy
       [UptrendOnly] ⏸️ SIDEWAYS: NO TRADING - Waiting for uptrend
       [UptrendOnly] ⏸️ CRASH: NO TRADING - Waiting for uptrend
 

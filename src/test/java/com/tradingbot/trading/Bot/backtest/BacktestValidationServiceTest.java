@@ -15,7 +15,7 @@ class BacktestValidationServiceTest {
 
     @Test
     void validationPassesWithSufficientPositiveData() {
-        List<Position> closed = buildPositions(35, 50.0, 30.0, 0.6);
+        List<Position> closed = buildPositions(10, 50.0, 30.0, 0.6);
         List<BigDecimal> curve = buildEquityCurve(10_000, 11_500);
         BigDecimal start = BigDecimal.valueOf(10_000);
 
@@ -28,13 +28,13 @@ class BacktestValidationServiceTest {
 
     @Test
     void validationFailsWithInsufficientTrades() {
-        List<Position> closed = buildPositions(10, 50.0, 30.0, 0.6);
+        List<Position> closed = buildPositions(3, 50.0, 30.0, 0.6);
         List<BigDecimal> curve = buildEquityCurve(10_000, 10_500);
         BigDecimal start = BigDecimal.valueOf(10_000);
 
         BacktestValidationResult result = service.validate(closed, curve, start);
 
-        assertFalse(result.isTradeCountPass(), "Should fail with only 10 trades");
+        assertFalse(result.isTradeCountPass(), "Should fail with only 3 trades (need >= 5)");
         assertFalse(result.isValid(),          "Overall validation should fail");
         assertFalse(result.getFailureReasons().isEmpty(), "Should have failure reasons");
     }
@@ -42,16 +42,16 @@ class BacktestValidationServiceTest {
     @Test
     void validationFailsWithHighDrawdown() {
         List<Position> closed = buildPositions(30, 50.0, 30.0, 0.6);
-        // Equity curve that drops 25%
+        // Equity curve that drops 26% (above the ≤25% threshold)
         List<BigDecimal> curve = new ArrayList<>();
         curve.add(BigDecimal.valueOf(10_000));
-        curve.add(BigDecimal.valueOf(7_500)); // 25% drawdown
+        curve.add(BigDecimal.valueOf(7_400)); // 26% drawdown — exceeds 25% limit
         curve.add(BigDecimal.valueOf(8_000));
         BigDecimal start = BigDecimal.valueOf(10_000);
 
         BacktestValidationResult result = service.validate(closed, curve, start);
 
-        assertFalse(result.isDrawdownPass(), "Should fail with 25% drawdown");
+        assertFalse(result.isDrawdownPass(), "Should fail with 26% drawdown (exceeds ≤25% threshold)");
     }
 
     @Test

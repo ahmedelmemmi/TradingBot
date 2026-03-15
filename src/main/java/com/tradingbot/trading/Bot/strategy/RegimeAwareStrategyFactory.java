@@ -14,8 +14,8 @@ import java.util.List;
  *
  * <p>Decision tree:</p>
  * <ul>
- *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link SimplifiedBreakoutStrategy} (proven 100% WR edge)</li>
- *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link NoTradeStrategy} (ARCHIVED: was SimplifiedBreakoutStrategy)</li>
+ *   <li>{@link MarketRegime#STRONG_UPTREND} → {@link RobustTrendBreakoutStrategy} (minimal conditions, real-data compatible)</li>
+ *   <li>{@link MarketRegime#HIGH_VOLATILITY} → {@link NoTradeStrategy} (preserve capital)</li>
  *   <li>{@link MarketRegime#SIDEWAYS} → {@link NoTradeStrategy} (no edge in sideways)</li>
  *   <li>{@link MarketRegime#STRONG_DOWNTREND} → {@link NoTradeStrategy} (preserve capital)</li>
  *   <li>{@link MarketRegime#CRASH} → {@link NoTradeStrategy} (emergency halt)</li>
@@ -24,12 +24,15 @@ import java.util.List;
 @Service
 public class RegimeAwareStrategyFactory {
 
-    private final SimplifiedBreakoutStrategy simplifiedBreakout;
-    private final PerfectBreakoutStrategy    perfectBreakout;
-    private final NoTradeStrategy            noTrade = new NoTradeStrategy();
+    private final RobustTrendBreakoutStrategy robustBreakout;
+    private final SimplifiedBreakoutStrategy  simplifiedBreakout;
+    private final PerfectBreakoutStrategy     perfectBreakout;
+    private final NoTradeStrategy             noTrade = new NoTradeStrategy();
 
-    public RegimeAwareStrategyFactory(SimplifiedBreakoutStrategy simplifiedBreakout,
+    public RegimeAwareStrategyFactory(RobustTrendBreakoutStrategy robustBreakout,
+                                      SimplifiedBreakoutStrategy simplifiedBreakout,
                                       PerfectBreakoutStrategy perfectBreakout) {
+        this.robustBreakout     = robustBreakout;
         this.simplifiedBreakout = simplifiedBreakout;
         this.perfectBreakout    = perfectBreakout;
     }
@@ -47,12 +50,9 @@ public class RegimeAwareStrategyFactory {
     public Strategy getStrategy(MarketRegime regime) {
         return switch (regime) {
             case STRONG_UPTREND -> {
-                System.out.println("[UptrendOnly] ✅ UPTREND: Trading with SimplifiedBreakoutStrategy");
-                yield simplifiedBreakout;
+                System.out.println("[UptrendOnly] ✅ UPTREND: Trading with RobustTrendBreakoutStrategy");
+                yield robustBreakout;
             }
-            // ARCHIVED: HIGH_VOLATILITY previously mapped to SimplifiedBreakoutStrategy.
-            // Kept for future re-enabling if a validated volatile-regime edge is found.
-            // case HIGH_VOLATILITY -> simplifiedBreakout;
             case HIGH_VOLATILITY, SIDEWAYS, STRONG_DOWNTREND, CRASH -> {
                 System.out.println("[UptrendOnly] ⏸️ " + regime + ": NO TRADING - Waiting for uptrend");
                 yield noTrade;
@@ -68,6 +68,7 @@ public class RegimeAwareStrategyFactory {
         return getStrategy(regime).evaluate(candles);
     }
 
+    public RobustTrendBreakoutStrategy getRobustBreakoutStrategy()    { return robustBreakout; }
     public SimplifiedBreakoutStrategy getSimplifiedBreakoutStrategy() { return simplifiedBreakout; }
     public PerfectBreakoutStrategy getPerfectBreakoutStrategy()       { return perfectBreakout; }
     public NoTradeStrategy getNoTradeStrategy()                       { return noTrade; }
