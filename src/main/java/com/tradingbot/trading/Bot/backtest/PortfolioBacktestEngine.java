@@ -103,7 +103,7 @@ public class PortfolioBacktestEngine {
                 if (!allowed) continue;
 
                 if (!portfolioRiskService.isPortfolioRiskAcceptable(
-                        positionManager.getOpenPositions(), calculateEquity(capital))) continue;
+                        positionManager.getOpenPositions(), calculateEquity(capital, price))) continue;
 
                 if (atr.compareTo(BigDecimal.ZERO) <= 0) continue;
 
@@ -124,7 +124,7 @@ public class PortfolioBacktestEngine {
 
                 BigDecimal regimeMult = portfolioRiskService.adjustRiskByRegime(regime);
                 BigDecimal ddMult     = portfolioRiskService.adjustRiskByDrawdown(
-                        calculateEquity(capital), peakEquity);
+                        calculateEquity(capital, price), peakEquity);
 
                 qty = qty.multiply(regimeMult).multiply(ddMult)
                         .setScale(0, RoundingMode.DOWN);
@@ -152,7 +152,7 @@ public class PortfolioBacktestEngine {
                         + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
             }
 
-            BigDecimal equity = calculateEquity(capital);
+            BigDecimal equity = calculateEquity(capital, price);
             if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
             equityCurve.add(equity);
         }
@@ -196,13 +196,41 @@ public class PortfolioBacktestEngine {
         return capital;
     }
 
-    private BigDecimal calculateEquity(BigDecimal capital) {
-        BigDecimal floating = BigDecimal.ZERO;
+    /**
+     * Computes true portfolio equity for a single-symbol run.
+     *
+     * <p>Previously used {@code p.getPnl()} which is {@code null} for open (not-yet-closed)
+     * positions, causing equity to be reported as just {@code capital} (remaining cash after
+     * deducting the position cost), artificially creating drawdowns of 40–90% while the
+     * position was open. Fixed to use {@code currentPrice × quantity} — the actual market
+     * value of the open position.</p>
+     *
+     * @param capital      current cash balance (position cost already deducted)
+     * @param currentPrice close price of the current bar for the symbol being backtested
+     * @return true equity = cash + current market value of all open positions
+     */
+    private BigDecimal calculateEquity(BigDecimal capital, BigDecimal currentPrice) {
+        BigDecimal positionValue = BigDecimal.ZERO;
         for (Position p : positionManager.getOpenPositions()) {
-            if (p.getPnl() != null)
-                floating = floating.add(p.getPnl());
+            positionValue = positionValue.add(currentPrice.multiply(p.getQuantity()));
         }
-        return capital.add(floating);
+        return capital.add(positionValue);
+    }
+
+    /**
+     * Computes true portfolio equity for a multi-symbol run.
+     *
+     * @param capital       current cash balance
+     * @param currentPrices map of symbol → current close price
+     * @return true equity = cash + current market value of all open positions
+     */
+    private BigDecimal calculateEquity(BigDecimal capital, Map<String, BigDecimal> currentPrices) {
+        BigDecimal positionValue = BigDecimal.ZERO;
+        for (Position p : positionManager.getOpenPositions()) {
+            BigDecimal price = currentPrices.getOrDefault(p.getSymbol(), p.getEntryPrice());
+            positionValue = positionValue.add(price.multiply(p.getQuantity()));
+        }
+        return capital.add(positionValue);
     }
 
     private BigDecimal forceClose(String symbol,
@@ -362,7 +390,7 @@ public class PortfolioBacktestEngine {
             capital = checkStopsWithCapitalReturn(symbol, price, atr, regime, capital, cooldownMap, i);
 
             if (strategy == null) {
-                BigDecimal equity = calculateEquity(capital);
+                BigDecimal equity = calculateEquity(capital, price);
                 if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
                 equityCurve.add(equity);
                 continue;
@@ -380,22 +408,22 @@ public class PortfolioBacktestEngine {
                         positionManager.getOpenPositions(), capital, regime);
 
                 if (!allowed) {
-                    BigDecimal equity = calculateEquity(capital);
+                    BigDecimal equity = calculateEquity(capital, price);
                     if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
                     equityCurve.add(equity);
                     continue;
                 }
 
                 if (!portfolioRiskService.isPortfolioRiskAcceptable(
-                        positionManager.getOpenPositions(), calculateEquity(capital))) {
-                    BigDecimal equity = calculateEquity(capital);
+                        positionManager.getOpenPositions(), calculateEquity(capital, price))) {
+                    BigDecimal equity = calculateEquity(capital, price);
                     if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
                     equityCurve.add(equity);
                     continue;
                 }
 
                 if (atr.compareTo(BigDecimal.ZERO) <= 0) {
-                    BigDecimal equity = calculateEquity(capital);
+                    BigDecimal equity = calculateEquity(capital, price);
                     if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
                     equityCurve.add(equity);
                     continue;
@@ -410,7 +438,7 @@ public class PortfolioBacktestEngine {
                 BigDecimal riskPerShare = price.subtract(stop).abs();
 
                 if (riskPerShare.compareTo(BigDecimal.ZERO) == 0) {
-                    BigDecimal equity = calculateEquity(capital);
+                    BigDecimal equity = calculateEquity(capital, price);
                     if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
                     equityCurve.add(equity);
                     continue;
@@ -420,13 +448,13 @@ public class PortfolioBacktestEngine {
 
                 BigDecimal regimeMult = portfolioRiskService.adjustRiskByRegime(regime);
                 BigDecimal ddMult     = portfolioRiskService.adjustRiskByDrawdown(
-                        calculateEquity(capital), peakEquity);
+                        calculateEquity(capital, price), peakEquity);
 
                 qty = qty.multiply(regimeMult).multiply(ddMult)
                         .setScale(0, RoundingMode.DOWN);
 
                 if (qty.compareTo(BigDecimal.ZERO) <= 0) {
-                    BigDecimal equity = calculateEquity(capital);
+                    BigDecimal equity = calculateEquity(capital, price);
                     if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
                     equityCurve.add(equity);
                     continue;
@@ -438,7 +466,7 @@ public class PortfolioBacktestEngine {
                 BigDecimal cost = slippageAdjustedPrice.multiply(qty).add(COMMISSION);
 
                 if (cost.compareTo(capital) > 0) {
-                    BigDecimal equity = calculateEquity(capital);
+                    BigDecimal equity = calculateEquity(capital, price);
                     if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
                     equityCurve.add(equity);
                     continue;
@@ -459,7 +487,7 @@ public class PortfolioBacktestEngine {
                         + " capital=" + capital.setScale(2, RoundingMode.HALF_UP));
             }
 
-            BigDecimal equity = calculateEquity(capital);
+            BigDecimal equity = calculateEquity(capital, price);
             if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
             equityCurve.add(equity);
         }
@@ -490,6 +518,8 @@ public class PortfolioBacktestEngine {
 
         for (int i = 60; i < candles; i++) {
 
+            Map<String, BigDecimal> currentPrices = new HashMap<>();
+
             for (String symbol : market.keySet()) {
 
                 List<Candle> series = market.get(symbol);
@@ -497,6 +527,8 @@ public class PortfolioBacktestEngine {
 
                 BigDecimal price = series.get(i).getClose();
                 BigDecimal atr   = atrCalc.calculate(subset, 14);
+
+                currentPrices.put(symbol, price);
 
                 positionManager.updatePrice(symbol, price);
 
@@ -518,7 +550,7 @@ public class PortfolioBacktestEngine {
                     if (!allowed) continue;
 
                     if (!portfolioRiskService.isPortfolioRiskAcceptable(
-                            positionManager.getOpenPositions(), calculateEquity(capital))) continue;
+                            positionManager.getOpenPositions(), calculateEquity(capital, currentPrices))) continue;
 
                     if (atr.compareTo(BigDecimal.ZERO) <= 0) continue;
 
@@ -539,7 +571,7 @@ public class PortfolioBacktestEngine {
 
                     BigDecimal regimeMult = portfolioRiskService.adjustRiskByRegime(regime);
                     BigDecimal ddMult     = portfolioRiskService.adjustRiskByDrawdown(
-                            calculateEquity(capital), peakEquity);
+                            calculateEquity(capital, currentPrices), peakEquity);
 
                     qty = qty.multiply(regimeMult).multiply(ddMult)
                             .setScale(0, RoundingMode.DOWN);
@@ -567,7 +599,7 @@ public class PortfolioBacktestEngine {
                 }
             }
 
-            BigDecimal equity = calculateEquity(capital);
+            BigDecimal equity = calculateEquity(capital, currentPrices);
             if (equity.compareTo(peakEquity) > 0) peakEquity = equity;
             equityCurve.add(equity);
         }

@@ -14,11 +14,13 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for {@link RobustTrendBreakoutStrategy}.
  *
- * <p>Verifies the three conditions:</p>
+ * <p>Verifies the five conditions:</p>
  * <ol>
- *   <li>MA20 &gt; MA50 (uptrend)</li>
- *   <li>Close &gt; 20-bar highest high + 0.1% buffer (breakout)</li>
- *   <li>RSI(14) &gt; 50 (momentum)</li>
+ *   <li>MA20/MA50 slope ≥ 1% (established uptrend, not just marginal crossover)</li>
+ *   <li>ATR(14) ≥ 0.5% of price (sufficient volatility for TP to be reachable)</li>
+ *   <li>Close &gt; 20-bar highest high + 0.1% buffer (breakout confirmation)</li>
+ *   <li>Current volume ≥ 1.2× 20-bar average (volume spike confirmation)</li>
+ *   <li>RSI(14) &gt; 50 (momentum confirmation)</li>
  * </ol>
  */
 class RobustTrendBreakoutStrategyTest {
@@ -48,19 +50,43 @@ class RobustTrendBreakoutStrategyTest {
                 "Should return HOLD at exactly 59 candles (MIN_CANDLES is 60)");
     }
 
-    // ── Condition 1: uptrend ──────────────────────────────────────────────────
+    // ── Condition 1: uptrend slope ────────────────────────────────────────────
 
     @Test
     void returnsHoldWhenNotInUptrend() {
-        // Flat market: MA20 ≈ MA50 ≈ same price, no uptrend
+        // Flat market: MA20 ≈ MA50 ≈ same price, slope = 0
         List<Candle> candles = generateCandles(80, 100.0, 0.0, 100_000);
-        // No uptrend, no breakout → HOLD
         TradingSignal last = evaluateIncrementally(strategy, candles);
         assertEquals(TradingSignal.HOLD, last,
                 "Flat market should produce HOLD (no uptrend)");
     }
 
-    // ── Condition 2: breakout uses close, not high ────────────────────────────
+    @Test
+    void returnsHoldWhenUptrendSlopeTooWeak() {
+        // Very gentle uptrend (0.05/bar) produces MA slope well below 1%:
+        // MA20 ≈ 103.5, MA50 ≈ 103.15 → slope ≈ 0.34% < 1%
+        List<Candle> phase1 = generateCandles(70, 100.0, 0.05, 150_000L);
+        List<Candle> phase2 = generateCandles(20, phase1.get(phase1.size()-1).getClose().doubleValue(),
+                0.0, 150_000L);
+        // Breakout bar: close above the 20-bar high
+        double refBase = phase2.get(phase2.size()-1).getClose().doubleValue();
+        double nBarHigh = phase2.stream()
+                .mapToDouble(c -> c.getHigh().doubleValue())
+                .max().orElse(refBase + 0.5);
+        double breakoutClose = nBarHigh * (1.0 + RobustTrendBreakoutStrategy.BREAKOUT_BUFFER_PCT) + 0.3;
+
+        List<Candle> candles = new ArrayList<>(phase1);
+        candles.addAll(phase2);
+        candles.add(new Candle("T", LocalDateTime.now().plusDays(91),
+                bd(refBase - 0.1), bd(breakoutClose + 0.5), bd(refBase - 0.5), bd(breakoutClose),
+                200_000L)); // volume spike present
+
+        TradingSignal last = evaluateIncrementally(strategy, candles);
+        assertEquals(TradingSignal.HOLD, last,
+                "Weak MA slope (< 1%) should produce HOLD even with a valid breakout");
+    }
+
+    // ── Condition 3: breakout uses close, not high ────────────────────────────
 
     @Test
     void returnsHoldWhenHighAboveBreakoutButCloseBelowIt() {
@@ -78,6 +104,24 @@ class RobustTrendBreakoutStrategyTest {
                 "Close above breakout level in an uptrend should produce BUY");
     }
 
+    // ── Condition 4: volume spike confirmation ────────────────────────────────
+
+    @Test
+    void returnsHoldWhenBreakoutHasLowVolume() {
+        // Full breakout sequence but the breakout bar has volume BELOW 1.2× average
+        List<Candle> candles = buildBreakoutSequence(true, true);
+        // Replace the last candle with an identical one but low volume (below threshold)
+        Candle lastBar = candles.remove(candles.size() - 1);
+        long lowVolume = 100_000L; // well below 1.2 × 150_000 = 180_000
+        candles.add(new Candle("T", LocalDateTime.now(),
+                lastBar.getOpen(), lastBar.getHigh(), lastBar.getLow(), lastBar.getClose(),
+                lowVolume));
+
+        TradingSignal last = evaluateIncrementally(strategy, candles);
+        assertEquals(TradingSignal.HOLD, last,
+                "Breakout on low volume (< 1.2× average) should produce HOLD");
+    }
+
     // ── Strategy name ─────────────────────────────────────────────────────────
 
     @Test
@@ -88,11 +132,12 @@ class RobustTrendBreakoutStrategyTest {
     // ── Helper: build a breakout candle sequence ──────────────────────────────
 
     /**
-     * Builds a candle sequence:
+     * Builds a candle sequence that satisfies all five strategy conditions:
      * <ol>
-     *   <li>70 bars of strong uptrend (ensures MA20 &gt; MA50 and RSI &gt; 50).</li>
-     *   <li>20 flat bars (sets the 20-bar reference high).</li>
-     *   <li>1 breakout bar with close / high controlled by parameters.</li>
+     *   <li>70 bars of strong uptrend (0.5/bar) → MA slope ≥ 1%, ATR ≥ 0.5%.</li>
+     *   <li>20 flat consolidation bars → sets the 20-bar reference high.</li>
+     *   <li>1 breakout bar with close / high controlled by parameters and
+     *       a volume spike (200k vs 150k avg = 1.33×) to pass the volume filter.</li>
      * </ol>
      */
     private List<Candle> buildBreakoutSequence(boolean closeBreaksOut,
