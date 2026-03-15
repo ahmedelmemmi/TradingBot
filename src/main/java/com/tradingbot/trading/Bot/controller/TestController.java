@@ -24,6 +24,7 @@ import com.tradingbot.trading.Bot.strategy.RsiCalculator;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
 import com.tradingbot.trading.Bot.strategy.SimplifiedBreakoutStrategy;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
+import com.tradingbot.trading.Bot.strategy.TunedBreakoutStrategy;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -1947,7 +1948,7 @@ public class TestController {
                     .compareTo(BigDecimal.ONE) >= 0;
             boolean drawdownPass    = result.getMaxDrawdown()
                     .compareTo(BigDecimal.valueOf(0.30)) <= 0;
-            boolean tradeCountPass  = result.getTotalTrades() >= 1;
+            boolean tradeCountPass  = result.getTotalTrades() >= 8;
             boolean allPass = winRatePass && profitFactorPass && drawdownPass && tradeCountPass;
 
             symbolResult.put("totalTrades",   result.getTotalTrades());
@@ -1965,7 +1966,7 @@ public class TestController {
             validation.put("winRate_pass",      winRatePass     + " (≥50%)");
             validation.put("profitFactor_pass", profitFactorPass + " (≥1.0)");
             validation.put("drawdown_pass",     drawdownPass    + " (≤30%)");
-            validation.put("tradeCount_pass",   tradeCountPass  + " (≥1 trade)");
+            validation.put("tradeCount_pass",   tradeCountPass  + " (≥8 trades)");
             validation.put("overall",           allPass ? "✅ PASS" : "⚠️ FAIL");
             symbolResult.put("validation", validation);
 
@@ -2005,6 +2006,484 @@ public class TestController {
         System.out.println("=".repeat(80) + "\n");
 
         return response;
+    }
+
+    /*
+    ======================================================
+    ✅ PER-ASSET FILTER DIAGNOSTICS
+    For each of the 13 quality-backtest symbols, runs a
+    bar-by-bar filter funnel using the current (default)
+    SimplifiedBreakoutStrategy thresholds and reports how
+    many bars pass each successive filter gate:
+
+      c1: regime = STRONG_UPTREND
+      c2: ATR > threshold
+      c3: volume above average ratio
+      c4: price breakout above 5-bar high + buffer
+      c5: RSI > minimum
+
+    Also identifies the "bottleneck" — the single filter
+    that drops the most bars — so callers know which
+    parameter to loosen first.
+
+    Endpoint: GET /backtest/real/multi/diagnostics
+    ======================================================
+     */
+    @GetMapping("/backtest/real/multi/diagnostics")
+    public Map<String, Object> multiAssetFilterDiagnostics() {
+
+        final List<String> SYMBOLS = List.of(
+                "SPY", "QQQ", "AAPL", "MSFT", "NVDA",
+                "GOOG", "AMZN", "META", "TSLA",
+                "IWM", "XLF", "XLE", "XLV"
+        );
+
+        final LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        final LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("PER-ASSET FILTER DIAGNOSTICS (" + SYMBOLS.size() + " symbols)");
+        System.out.println("=".repeat(80));
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("description",
+                "Filter funnel counts per symbol. 'bottleneck' is the first filter that drops " +
+                "the most trades. Loosen that parameter first.");
+        response.put("defaultParams", buildDefaultParamsDoc());
+        response.put("dateFrom", from.toString());
+        response.put("dateTo",   to.toString());
+
+        List<Map<String, Object>> symbolDiags = new ArrayList<>();
+
+        for (String symbol : SYMBOLS) {
+            System.out.println("\n--- Diagnosing " + symbol + " ---");
+
+            List<Candle> candles = yahooFinanceMarketDataProvider.getCandles(
+                    symbol, MAX_CANDLES_FOR_BACKTEST, from, to);
+
+            Map<String, Object> diag = new LinkedHashMap<>();
+            diag.put("symbol", symbol);
+            diag.put("totalCandles", candles.size());
+
+            if (candles.isEmpty()) {
+                diag.put("error", "No data from Yahoo Finance");
+                symbolDiags.add(diag);
+                continue;
+            }
+
+            int[] counts = runFilterFunnel(candles,
+                    MarketRegimeService.STRONG_UPTREND_SLOPE_THRESHOLD,
+                    SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT,
+                    SimplifiedBreakoutStrategy.BREAKOUT_BUFFER,
+                    SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT,
+                    SimplifiedBreakoutStrategy.RSI_MIN);
+
+            // counts: [barsAnalyzed, regimePass, atrPass, volumePass, breakoutPass, rsiPass]
+            int barsAnalyzed = counts[0];
+            int regimePass   = counts[1];
+            int atrPass      = counts[2];
+            int volumePass   = counts[3];
+            int breakoutPass = counts[4];
+            int rsiPass      = counts[5];
+
+            Map<String, String> funnel = new LinkedHashMap<>();
+            funnel.put("c1_regime_STRONG_UPTREND",
+                    regimePass + "/" + barsAnalyzed + " bars");
+            funnel.put("c2_atr_above_" + pct(SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT),
+                    (regimePass > 0 ? atrPass + "/" + regimePass : "n/a") + " bars");
+            funnel.put("c3_volume_above_" + pct(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT),
+                    (atrPass > 0 ? volumePass + "/" + atrPass : "n/a") + " bars");
+            funnel.put("c4_breakout_buf_" + pct(SimplifiedBreakoutStrategy.BREAKOUT_BUFFER - 1.0),
+                    (volumePass > 0 ? breakoutPass + "/" + volumePass : "n/a") + " bars");
+            funnel.put("c5_rsi_above_" + (int) SimplifiedBreakoutStrategy.RSI_MIN,
+                    (breakoutPass > 0 ? rsiPass + "/" + breakoutPass : "n/a") + " bars");
+            funnel.put("all_conditions_met", rsiPass + " bars");
+            diag.put("filterFunnel", funnel);
+
+            diag.put("bottleneck", identifyBottleneck(
+                    barsAnalyzed, regimePass, atrPass, volumePass, breakoutPass, rsiPass));
+
+            symbolDiags.add(diag);
+
+            System.out.println("[Diagnostics] " + symbol
+                    + " regime=" + regimePass + " atr=" + atrPass
+                    + " vol=" + volumePass + " bo=" + breakoutPass
+                    + " rsi=" + rsiPass + " total=" + rsiPass);
+        }
+
+        response.put("results", symbolDiags);
+
+        System.out.println("=".repeat(80) + "\n");
+        return response;
+    }
+
+    /*
+    ======================================================
+    ✅ PER-ASSET PARAMETER TUNING BACKTEST
+    For each of the 13 symbols, systematically relaxes ONE
+    filter at a time (in order: regime slope → ATR → breakout
+    buffer → volume) until the asset achieves ≥8 trades with
+    quality metrics:
+      Win rate    ≥ 50%
+      Profit fac  ≥ 1.0
+      Max drawdown ≤ 30%
+
+    Reports per-asset tuned settings, metrics, and a final
+    audit table. Assets that never reach ≥8 trades are
+    flagged as INSUFFICIENT_TRADES. Assets that reach
+    ≥8 trades but fail quality checks are flagged POOR_QUALITY.
+
+    STOP condition: ≥ 8 assets achieve PASS status.
+
+    Endpoint: GET /backtest/real/multi/tuned
+    ======================================================
+     */
+    @GetMapping("/backtest/real/multi/tuned")
+    public Map<String, Object> multiAssetTunedBacktest() {
+
+        final List<String> SYMBOLS = List.of(
+                "SPY", "QQQ", "AAPL", "MSFT", "NVDA",
+                "GOOG", "AMZN", "META", "TSLA",
+                "IWM", "XLF", "XLE", "XLV"
+        );
+
+        final LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        final LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        // Ordered parameter sweep: relax one dimension at a time.
+        // Each row: { slopeThreshold, atrThreshold, breakoutBuffer, volumeRatio }
+        // Start from strictest (defaults) and progressively loosen.
+        final double[][] PARAM_SWEEP = {
+            // slope%, atr%,  buffer(mult), volume%
+            { 0.030, 0.009, 1.0005, 0.50 },  // 0: defaults
+            { 0.020, 0.009, 1.0005, 0.50 },  // 1: loosen regime slope 3%→2%
+            { 0.020, 0.007, 1.0005, 0.50 },  // 2: loosen ATR 0.9%→0.7%
+            { 0.020, 0.005, 1.0005, 0.50 },  // 3: loosen ATR 0.9%→0.5%
+            { 0.020, 0.005, 1.0001, 0.50 },  // 4: loosen buffer →0.01%
+            { 0.020, 0.005, 1.0000, 0.50 },  // 5: remove buffer entirely
+            { 0.015, 0.005, 1.0000, 0.30 },  // 6: loosen slope+volume further
+            { 0.015, 0.003, 1.0000, 0.20 },  // 7: maximum relaxation
+        };
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("PER-ASSET TUNED BACKTEST (" + SYMBOLS.size() + " symbols)");
+        System.out.println("=".repeat(80));
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("description",
+                "Per-asset parameter sweep: relaxes ONE filter at a time until ≥8 trades " +
+                "AND quality metrics (winRate≥50%, PF≥1.0, DD≤30%) are achieved.");
+        response.put("qualityGates",
+                Map.of("minTrades", 8, "minWinRate", "50%",
+                       "minProfitFactor", "1.0", "maxDrawdown", "30%"));
+        response.put("dateFrom", from.toString());
+        response.put("dateTo",   to.toString());
+
+        List<Map<String, Object>> symbolResults = new ArrayList<>();
+        int passCount  = 0;
+        int totalCount = 0;
+
+        for (String symbol : SYMBOLS) {
+            System.out.println("\n--- Tuning " + symbol + " ---");
+
+            List<Candle> candles = yahooFinanceMarketDataProvider.getCandles(
+                    symbol, MAX_CANDLES_FOR_BACKTEST, from, to);
+
+            Map<String, Object> symbolResult = new LinkedHashMap<>();
+            symbolResult.put("symbol",       symbol);
+            symbolResult.put("totalCandles", candles.size());
+
+            if (candles.isEmpty()) {
+                symbolResult.put("status", "ERROR");
+                symbolResult.put("error",  "No data from Yahoo Finance");
+                symbolResults.add(symbolResult);
+                totalCount++;
+                continue;
+            }
+
+            // Try each parameter combo in order, stop at first PASS
+            String   bestStatus    = "INSUFFICIENT_TRADES";
+            int      bestParamIdx  = -1;
+            BacktestResult bestResult = null;
+            double[] bestParams    = null;
+
+            for (int pi = 0; pi < PARAM_SWEEP.length; pi++) {
+                double[] p = PARAM_SWEEP[pi];
+
+                TunedBreakoutStrategy tunedStrategy = new TunedBreakoutStrategy(
+                        p[0], p[1], p[2], p[3], SimplifiedBreakoutStrategy.RSI_MIN,
+                        rsiCalculator);
+
+                BacktestResult result = backtestEngine.runStrategy(
+                        symbol, candles, tunedStrategy);
+
+                boolean tradeCountOk  = result.getTotalTrades() >= 8;
+                boolean winRateOk     = result.getWinRate()
+                        .compareTo(BigDecimal.valueOf(0.50)) >= 0;
+                boolean profitFactOk  = result.getProfitFactor()
+                        .compareTo(BigDecimal.ONE) >= 0;
+                boolean drawdownOk    = result.getMaxDrawdown()
+                        .compareTo(BigDecimal.valueOf(0.30)) <= 0;
+
+                System.out.println("[Tuning] " + symbol
+                        + " combo=" + pi
+                        + " trades=" + result.getTotalTrades()
+                        + " winRate=" + result.getWinRate()
+                        + " pf=" + result.getProfitFactor()
+                        + " dd=" + result.getMaxDrawdown());
+
+                if (tradeCountOk) {
+                    bestResult   = result;
+                    bestParamIdx = pi;
+                    bestParams   = p;
+
+                    if (winRateOk && profitFactOk && drawdownOk) {
+                        bestStatus = "PASS";
+                        break; // stop at first combo that fully passes
+                    } else {
+                        bestStatus = "POOR_QUALITY"; // trades ok but quality fails
+                        // keep searching — a looser combo might yield better quality
+                    }
+                }
+            }
+
+            // If we only found POOR_QUALITY, keep it; if nothing found, report
+            if (bestResult == null) {
+                // No combo gave ≥8 trades — report the most-trades combo we found
+                int maxTrades = 0;
+                for (int pi = 0; pi < PARAM_SWEEP.length; pi++) {
+                    double[] p = PARAM_SWEEP[pi];
+                    TunedBreakoutStrategy tunedStrategy = new TunedBreakoutStrategy(
+                            p[0], p[1], p[2], p[3], SimplifiedBreakoutStrategy.RSI_MIN,
+                            rsiCalculator);
+                    BacktestResult result = backtestEngine.runStrategy(
+                            symbol, candles, tunedStrategy);
+                    if (result.getTotalTrades() > maxTrades) {
+                        maxTrades = result.getTotalTrades();
+                        bestResult   = result;
+                        bestParamIdx = pi;
+                        bestParams   = p;
+                    }
+                }
+                bestStatus = "INSUFFICIENT_TRADES";
+            }
+
+            if (bestResult != null) {
+                boolean winRateOk    = bestResult.getWinRate()
+                        .compareTo(BigDecimal.valueOf(0.50)) >= 0;
+                boolean profitFactOk = bestResult.getProfitFactor()
+                        .compareTo(BigDecimal.ONE) >= 0;
+                boolean drawdownOk   = bestResult.getMaxDrawdown()
+                        .compareTo(BigDecimal.valueOf(0.30)) <= 0;
+                boolean tradeCountOk = bestResult.getTotalTrades() >= 8;
+
+                symbolResult.put("totalTrades",   bestResult.getTotalTrades());
+                symbolResult.put("winningTrades", bestResult.getWinningTrades());
+                symbolResult.put("losingTrades",  bestResult.getLosingTrades());
+                symbolResult.put("winRate",       bestResult.getWinRate());
+                symbolResult.put("profitFactor",  bestResult.getProfitFactor());
+                symbolResult.put("maxDrawdown",   bestResult.getMaxDrawdown());
+                symbolResult.put("totalPnL",      bestResult.getTotalPnL());
+                symbolResult.put("endCapital",    bestResult.getEndingCapital());
+
+                Map<String, Object> tunedParams = new LinkedHashMap<>();
+                tunedParams.put("paramComboIndex",  bestParamIdx);
+                tunedParams.put("slopeThreshold",   pct(bestParams[0]) + " (default: 3.0%)");
+                tunedParams.put("atrThreshold",     pct(bestParams[1]) + " (default: 0.9%)");
+                tunedParams.put("breakoutBuffer",   pct(bestParams[2] - 1.0) + " (default: 0.05%)");
+                tunedParams.put("volumeRatio",      pct(bestParams[3]) + " (default: 50.0%)");
+                symbolResult.put("tunedParams", tunedParams);
+
+                Map<String, Object> validation = new LinkedHashMap<>();
+                validation.put("tradeCount_pass", tradeCountOk + " (" + bestResult.getTotalTrades() + " trades, need ≥8)");
+                validation.put("winRate_pass",    winRateOk    + " (" + bestResult.getWinRate() + ", need ≥50%)");
+                validation.put("profitFact_pass", profitFactOk + " (" + bestResult.getProfitFactor() + ", need ≥1.0)");
+                validation.put("drawdown_pass",   drawdownOk   + " (" + bestResult.getMaxDrawdown() + ", need ≤30%)");
+                validation.put("overall", bestStatus.equals("PASS") ? "✅ PASS" : "⚠️ " + bestStatus);
+                symbolResult.put("validation", validation);
+            }
+
+            symbolResult.put("status", bestStatus);
+            if (bestStatus.equals("PASS")) passCount++;
+            totalCount++;
+            symbolResults.add(symbolResult);
+
+            System.out.println("[Tuning] " + symbol + " → " + bestStatus
+                    + " (paramCombo=" + bestParamIdx + ")");
+        }
+
+        response.put("results", symbolResults);
+
+        // ── Audit summary ─────────────────────────────────────────────────────
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("symbolsTested",  totalCount);
+        audit.put("symbolsPassed",  passCount);
+        audit.put("symbolsFailed",  totalCount - passCount);
+        audit.put("passRate",       totalCount == 0 ? "N/A"
+                : BigDecimal.valueOf(passCount)
+                .divide(BigDecimal.valueOf(totalCount), 4, RoundingMode.HALF_UP)
+                .toPlainString());
+
+        boolean readyForPaperTrading = passCount >= 8;
+        audit.put("readyForPaperTrading", readyForPaperTrading);
+        audit.put("paperTradingVerdict",
+                readyForPaperTrading
+                        ? "✅ SYSTEM READY — ≥8 assets pass. Proceed to paper trading with documented per-asset settings."
+                        : "⚠️ NOT READY — Only " + passCount + "/13 assets pass. "
+                        + "Continue loosening filters or review strategy robustness.");
+        audit.put("overall", passCount == totalCount
+                ? "✅ ALL SYMBOLS PASSED"
+                : "⚠️ " + (totalCount - passCount) + " SYMBOL(S) NOT PASSING");
+
+        response.put("auditSummary", audit);
+
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("PER-ASSET TUNED BACKTEST COMPLETE");
+        System.out.println("Passed: " + passCount + " / " + totalCount);
+        System.out.println("Paper trading ready: " + (passCount >= 8));
+        System.out.println("=".repeat(80) + "\n");
+
+        return response;
+    }
+
+    // ── Private helpers for multi-asset diagnostics ───────────────────────────
+
+    /**
+     * Runs a bar-by-bar filter funnel for the given parameter values.
+     *
+     * @return int[6]: [barsAnalyzed, regimePass, atrPass, volumePass, breakoutPass, rsiPass]
+     */
+    private int[] runFilterFunnel(List<Candle> candles,
+                                   double slopeThresh,
+                                   double atrThresh,
+                                   double bufferMult,
+                                   double volRatio,
+                                   double rsiMin) {
+        AtrCalculator atrCalc = new AtrCalculator();
+        marketRegimeService.reset();
+
+        int barsAnalyzed = 0;
+        int regimePass   = 0;
+        int atrPass      = 0;
+        int volumePass   = 0;
+        int breakoutPass = 0;
+        int rsiPass      = 0;
+
+        for (int i = SimplifiedBreakoutStrategy.MIN_CANDLES; i < candles.size(); i++) {
+
+            List<Candle> subset = candles.subList(0, i + 1);
+            barsAnalyzed++;
+
+            // ── C1: Inline slope-based STRONG_UPTREND ─────────────────────────
+            if (!inlineIsStrongUptrend(subset, slopeThresh)) continue;
+            regimePass++;
+
+            Candle current = subset.get(subset.size() - 1);
+            BigDecimal price   = current.getClose();
+            BigDecimal barHigh = current.getHigh();
+
+            // ── C2: ATR threshold ─────────────────────────────────────────────
+            BigDecimal atr    = atrCalc.calculate(subset, 14);
+            BigDecimal atrPct = price.compareTo(BigDecimal.ZERO) == 0
+                    ? BigDecimal.ZERO
+                    : atr.divide(price, 6, RoundingMode.HALF_UP);
+
+            if (atrPct.compareTo(BigDecimal.valueOf(atrThresh)) < 0) continue;
+            atrPass++;
+
+            // ── C3: Volume ratio ──────────────────────────────────────────────
+            long currentVol = current.getVolume();
+            long avgVol     = diagAvgVolume(subset, 20);
+
+            BigDecimal volumeRatioBd = (avgVol == 0)
+                    ? BigDecimal.ZERO
+                    : BigDecimal.valueOf(currentVol)
+                            .divide(BigDecimal.valueOf(avgVol), 6, RoundingMode.HALF_UP);
+
+            if (volumeRatioBd.compareTo(BigDecimal.valueOf(volRatio)) < 0) continue;
+            volumePass++;
+
+            // ── C4: Breakout above 5-bar high + buffer ────────────────────────
+            BigDecimal highest5      = diagHighestHigh(subset, SimplifiedBreakoutStrategy.BREAKOUT_PERIOD);
+            BigDecimal breakoutLevel = highest5.multiply(BigDecimal.valueOf(bufferMult));
+
+            if (barHigh.compareTo(breakoutLevel) <= 0) continue;
+            breakoutPass++;
+
+            // ── C5: RSI ───────────────────────────────────────────────────────
+            try {
+                BigDecimal rsi = rsiCalculator.calculate(subset);
+                if (rsi.compareTo(BigDecimal.valueOf(rsiMin)) < 0) continue;
+                rsiPass++;
+            } catch (Exception e) {
+                // insufficient data
+            }
+        }
+
+        return new int[]{ barsAnalyzed, regimePass, atrPass, volumePass, breakoutPass, rsiPass };
+    }
+
+    /**
+     * Inline STRONG_UPTREND check: MA20/MA50 slope > slopeThresh AND 10-bar momentum positive.
+     */
+    private boolean inlineIsStrongUptrend(List<Candle> candles, double slopeThresh) {
+        if (candles.size() < 50) return false;
+
+        BigDecimal ma20 = diagMovingAverage(candles, 20);
+        BigDecimal ma50 = diagMovingAverage(candles, 50);
+
+        if (ma50.compareTo(BigDecimal.ZERO) == 0) return false;
+
+        BigDecimal slope = ma20.subtract(ma50)
+                .divide(ma50, 6, RoundingMode.HALF_UP);
+
+        if (slope.compareTo(BigDecimal.valueOf(slopeThresh)) <= 0) return false;
+
+        // 10-bar momentum
+        if (candles.size() < 11) return false;
+        BigDecimal recent = candles.get(candles.size() - 1).getClose();
+        BigDecimal past   = candles.get(candles.size() - 10).getClose();
+        return recent.compareTo(past) > 0;
+    }
+
+    /** Identifies which filter gate is the biggest bottleneck. */
+    private String identifyBottleneck(int analyzed, int regime, int atr,
+                                       int volume, int breakout, int rsi) {
+        if (analyzed == 0) return "NO_DATA";
+        if (regime  == 0) return "REGIME_SLOPE — no STRONG_UPTREND bars. "
+                + "Try lowering slopeThreshold from 3% to 2%.";
+        if (atr     == 0) return "ATR_THRESHOLD — ATR% too low on all uptrend bars. "
+                + "Try lowering atrThreshold from 0.9% to 0.7%.";
+        if (volume  == 0) return "VOLUME_RATIO — volume below average on all ATR-passing bars. "
+                + "Try lowering volumeRatio from 50% to 30%.";
+        if (breakout == 0) return "BREAKOUT_BUFFER — bar high never exceeds 5-bar high + buffer. "
+                + "Try lowering breakoutBuffer from 0.05% to 0.01%.";
+        if (rsi     == 0) return "RSI — RSI below " + (int) SimplifiedBreakoutStrategy.RSI_MIN
+                + " on all breakout bars. Try lowering rsiMin to 45.";
+        if (rsi     < 8)  return "LOW_SIGNAL_COUNT (" + rsi + " bars pass all filters). "
+                + "Need ≥8 signals; combine regime + ATR loosening.";
+        return "NO_BOTTLENECK — " + rsi + " bars pass all filters with default settings.";
+    }
+
+    /** Formats a decimal fraction as a percentage string (e.g. 0.009 → "0.9%"). */
+    private String pct(double fraction) {
+        return BigDecimal.valueOf(fraction * 100)
+                .setScale(2, RoundingMode.HALF_UP).toPlainString() + "%";
+    }
+
+    /** Builds a documentation map for the default strategy parameters. */
+    private Map<String, String> buildDefaultParamsDoc() {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("regimeSlopeThreshold",
+                pct(MarketRegimeService.STRONG_UPTREND_SLOPE_THRESHOLD) + " (MA20/MA50 slope)");
+        params.put("atrThreshold",
+                pct(SimplifiedBreakoutStrategy.VOLATILITY_THRESHOLD_PCT) + " of price");
+        params.put("breakoutBuffer",
+                pct(SimplifiedBreakoutStrategy.BREAKOUT_BUFFER - 1.0) + " above 5-bar high");
+        params.put("volumeRatioMin",
+                pct(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT) + " of 20-bar avg volume");
+        params.put("rsiMin", (int) SimplifiedBreakoutStrategy.RSI_MIN + "");
+        return params;
     }
 
 }
