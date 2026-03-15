@@ -23,10 +23,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li><b>1-bar delayed fills</b>: signal at bar[i] fills at bar[i+1]</li>
  *   <li><b>Entry confirmation</b>: fill only if bar[i+1] close ≥ signal-bar close (filters false breakouts)</li>
- *   <li><b>ATR-based stop loss</b>: 1.5×ATR(14) below entry (≈5.5% for real SPY data)</li>
- *   <li><b>ATR-based take profit</b>: 2.5×ATR(14) above entry (≈9.25% for real SPY data)</li>
+ *   <li><b>ATR-based stop loss</b>: 2.0×ATR(14) below entry — wider than market noise to avoid false stop-outs</li>
+ *   <li><b>ATR-based take profit</b>: 3.5×ATR(14) above entry — reward-to-risk ratio of 1.75</li>
+ *   <li><b>Trailing stop</b>: once price moves 1×ATR above entry, stop trails at highest-price − 2×ATR</li>
  *   <li><b>Dynamic slippage</b>: via {@link SlippageService} based on ATR and regime</li>
  *   <li><b>Capital deducted at entry</b>: (price × qty) removed from available capital immediately</li>
+ *   <li><b>Equity tracking</b>: capital + current market value of open position (not just unrealized PnL)</li>
  *   <li><b>Gap risk</b>: SL execution uses fill price, not exact SL level</li>
  *   <li><b>Trade log</b>: every entry/exit logged as {@link TradeRecord} with CSV export</li>
  * </ul>
@@ -101,6 +103,21 @@ public class BacktestEngine {
                 BigDecimal atr = atrCalc.calculate(subset, 14);
                 BigDecimal slippage = slippageService.calculateSlippage(atr, rawPrice, regime);
 
+                // Update trailing stop: once price exceeds entry + 1×ATR, trail at
+                // highestPrice − 2×ATR. This locks in partial profits while giving
+                // the trade room to run, replacing the fixed initial ATR-based SL.
+                if (atr.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal trailingActivation = pos.getEntryPrice().add(atr);
+                    if (rawPrice.compareTo(trailingActivation) >= 0) {
+                        BigDecimal newTrailingStop = rawPrice.subtract(
+                                atr.multiply(BigDecimal.valueOf(2.0)))
+                                .setScale(4, RoundingMode.HALF_UP);
+                        if (newTrailingStop.compareTo(pos.getStopLoss()) > 0) {
+                            pos.setStopLoss(newTrailingStop);
+                        }
+                    }
+                }
+
                 boolean hitSl = rawPrice.compareTo(pos.getStopLoss()) <= 0;
                 boolean hitTp = rawPrice.compareTo(pos.getTakeProfit()) >= 0;
 
@@ -168,8 +185,10 @@ public class BacktestEngine {
 
                     BigDecimal entryFill = rawPrice.multiply(BigDecimal.ONE.add(slippage));
 
-                    // ATR-based stop loss: 1.5×ATR(14) below entry (≈5.5% for real SPY).
-                    // Keeps stop outside normal daily noise (real ATR ≈ 3.7% of price).
+                    // ATR-based stop loss: 2.0×ATR(14) below entry.
+                    // Wider than 1.5×ATR to stay outside normal daily noise and avoid
+                    // false stop-outs on breakout retracements. For real SPY daily data,
+                    // ATR is typically 0.35–0.7% of price; 2.0×ATR ≈ 0.7–1.4% below entry.
                     BigDecimal atrPct = entryFill.compareTo(BigDecimal.ZERO) == 0 || atr.compareTo(BigDecimal.ZERO) <= 0
                             ? BigDecimal.ZERO
                             : atr.divide(entryFill, 6, RoundingMode.HALF_UP);
@@ -177,13 +196,14 @@ public class BacktestEngine {
                     if (atrPct.compareTo(BigDecimal.ZERO) > 0) {
 
                         BigDecimal stopLoss = entryFill.multiply(
-                                        BigDecimal.ONE.subtract(BigDecimal.valueOf(1.5).multiply(atrPct)))
+                                        BigDecimal.ONE.subtract(BigDecimal.valueOf(2.0).multiply(atrPct)))
                                 .setScale(4, RoundingMode.HALF_UP);
 
-                        // ATR-based take profit: 2.5×ATR(14) above entry (≈9.25% for real SPY).
-                        // Maintains ≥1.67:1 reward-to-risk even with the wider stop.
+                        // ATR-based take profit: 3.5×ATR(14) above entry.
+                        // Reward-to-risk ratio of 1.75 (3.5 / 2.0), maintaining
+                        // strong positive expected value with a 60% win rate target.
                         BigDecimal takeProfit = entryFill.multiply(
-                                        BigDecimal.ONE.add(BigDecimal.valueOf(2.5).multiply(atrPct)))
+                                        BigDecimal.ONE.add(BigDecimal.valueOf(3.5).multiply(atrPct)))
                                 .setScale(4, RoundingMode.HALF_UP);
 
                         BigDecimal riskPerTrade = capital.multiply(RISK_PER_TRADE);
@@ -248,12 +268,17 @@ public class BacktestEngine {
                 }
             }
 
-            // ── 4. Equity calculation (capital + unrealized PnL) ──────────────
+            // ── 4. Equity calculation (capital + current position market value) ────
+            // IMPORTANT: the position cost was already deducted from capital at entry.
+            // To get true equity we must add back the current market value of any open
+            // position (price × quantity), NOT just the unrealized PnL.  Adding only
+            // unrealized PnL would give: equity = remaining_cash + (price−entry)×qty,
+            // which under-reports equity by entry×qty and creates false drawdowns of
+            // 40–70% even when the position is near entry price.
             BigDecimal equity = capital;
             for (Position p : positionManager.getOpenPositions()) {
-                BigDecimal unrealized = rawPrice.subtract(p.getEntryPrice())
-                        .multiply(p.getQuantity());
-                equity = equity.add(unrealized);
+                BigDecimal positionValue = rawPrice.multiply(p.getQuantity());
+                equity = equity.add(positionValue);
             }
 
             equityCurve.add(equity);
