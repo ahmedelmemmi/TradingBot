@@ -110,6 +110,9 @@ public class RobustTrendBreakoutStrategy implements Strategy {
         // ── Condition 2: TREND STRENGTH — (MA20-MA50)/MA50 >= MIN_MA_RATIO_PCT ──
         // Marginal crossovers (MA20 barely above MA50) frequently reverse;
         // requiring a minimum ratio filters these weak signals.
+        if (ma50.compareTo(BigDecimal.ZERO) == 0) {
+            return TradingSignal.HOLD;
+        }
         BigDecimal maRatio = ma20.subtract(ma50)
                 .divide(ma50, 6, RoundingMode.HALF_UP);
 

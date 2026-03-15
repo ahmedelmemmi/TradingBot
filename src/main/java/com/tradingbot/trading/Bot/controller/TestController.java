@@ -293,6 +293,7 @@ public class TestController {
                 uptrendPass++;
 
                 // C2: trend strength
+                if (ma50.compareTo(BigDecimal.ZERO) == 0) continue;
                 BigDecimal maRatio = ma20.subtract(ma50).divide(ma50, 6, RoundingMode.HALF_UP);
                 if (maRatio.compareTo(BigDecimal.valueOf(RobustTrendBreakoutStrategy.MIN_MA_RATIO_PCT)) < 0) continue;
                 strengthPass++;

@@ -226,12 +226,9 @@ class RobustTrendBreakoutStrategyTest {
         List<Candle> candles = new ArrayList<>();
         LocalDateTime t = LocalDateTime.now();
 
-        // Use a very gentle drift: after 70 bars, MA20 ≈ 100.7, MA50 ≈ 100.3
-        // ratio = (100.7 - 100.3) / 100.3 ≈ 0.004 — below MIN_MA_RATIO_PCT (0.3%)
-        // NOTE: use 0.004 to stay below 0.003 requires very gentle drift.
-        // Drift of 0.004/bar: after 50 bars from 100, close ≈ 100.2
-        // MA20 = avg of last 20 closes ≈ 100.13, MA50 = avg of last 50 ≈ 100.04
-        // ratio ≈ 0.09% < 0.3% → HOLD
+        // Use a very gentle drift (0.004/bar) so the MA20/MA50 ratio stays well below
+        // the MIN_MA_RATIO_PCT (0.3%) threshold.
+        // After 70 bars: MA20 ≈ 100.13, MA50 ≈ 100.04 → ratio ≈ 0.09% < 0.3% → HOLD
         double price = 100.0;
         for (int i = 0; i < 70; i++) {
             price += 0.004;
