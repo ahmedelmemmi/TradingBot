@@ -2,6 +2,7 @@ package com.tradingbot.trading.Bot.controller;
 
 import com.tradingbot.trading.Bot.backtest.BacktestEngine;
 import com.tradingbot.trading.Bot.backtest.BacktestResult;
+import com.tradingbot.trading.Bot.backtest.TradeRecord;
 import com.tradingbot.trading.Bot.backtest.BacktestValidationResult;
 import com.tradingbot.trading.Bot.backtest.BacktestValidationService;
 import com.tradingbot.trading.Bot.backtest.HybridBacktestResult;
@@ -2569,6 +2570,168 @@ public class TestController {
                 pct(SimplifiedBreakoutStrategy.MIN_VOLUME_RATIO_PCT) + " of 20-bar avg volume");
         params.put("rsiMin", (int) SimplifiedBreakoutStrategy.RSI_MIN + "");
         return params;
+    }
+
+    /*
+    ======================================================
+    ✅ TRADE AUDIT — ROOT CAUSE ANALYSIS
+    Runs the RobustTrendBreakoutStrategy backtest on key
+    failing assets (SPY, QQQ, AAPL, MSFT) and returns a
+    detailed per-trade breakdown showing:
+      - Entry price, SL, TP, regime, ATR% at entry
+      - Exit price, exit reason (SL/TP/FORCE_CLOSE), bars held
+      - PnL and win/loss classification
+      - Root-cause tag for each losing trade
+
+    Use this endpoint to investigate why individual trades
+    lose and find patterns (e.g., most losses = SL hit on
+    day 2 = noise-induced false breakout).
+
+    Endpoint: GET /backtest/real/audit
+    ======================================================
+     */
+    @Operation(summary = "Trade audit — root cause analysis for key failing assets",
+               description = "Runs RobustTrendBreakoutStrategy on SPY, QQQ, AAPL, MSFT and returns " +
+                             "per-trade detail with exit reasons and loss root-cause categorisation.")
+    @GetMapping("/backtest/real/audit")
+    public Map<String, Object> tradeAudit() {
+
+        final List<String> AUDIT_SYMBOLS = List.of("SPY", "QQQ", "AAPL", "MSFT");
+        final LocalDateTime from = LocalDateTime.of(2022, 1, 1, 0, 0);
+        final LocalDateTime to   = LocalDateTime.of(2024, 3, 14, 23, 59);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("strategy",  robustBreakoutStrategy.getName());
+        response.put("dateFrom",  from.toString());
+        response.put("dateTo",    to.toString());
+        response.put("purpose",
+                "Root-cause audit: per-trade breakdown to identify why signals fail quality gates. " +
+                "Loss root causes: QUICK_REVERSAL (SL hit ≤2 bars), SLOW_GRIND_DOWN (SL hit 3-10 bars), " +
+                "TIMEOUT (force-close after long hold), MARGINAL_EXIT (close to SL/TP).");
+
+        List<Map<String, Object>> auditResults = new ArrayList<>();
+        AtrCalculator atrCalc = new AtrCalculator();
+
+        for (String symbol : AUDIT_SYMBOLS) {
+            System.out.println("\n--- Auditing " + symbol + " ---");
+
+            List<Candle> candles = yahooFinanceMarketDataProvider.getCandles(
+                    symbol, MAX_CANDLES_FOR_BACKTEST, from, to);
+
+            Map<String, Object> symbolAudit = new LinkedHashMap<>();
+            symbolAudit.put("symbol",       symbol);
+            symbolAudit.put("totalCandles", candles.size());
+
+            if (candles.isEmpty()) {
+                symbolAudit.put("error", "No data from Yahoo Finance");
+                auditResults.add(symbolAudit);
+                continue;
+            }
+
+            BacktestResult result = backtestEngine.runStrategy(
+                    symbol, candles, robustBreakoutStrategy);
+
+            // ── Per-trade detail ─────────────────────────────────────────────
+            List<Map<String, Object>> tradeDetails = new ArrayList<>();
+            int quickReversals  = 0;
+            int slowGrindDowns  = 0;
+            int timeouts        = 0;
+            int marginalExits   = 0;
+            int tpHits          = 0;
+
+            for (TradeRecord rec : result.getTradeLog()) {
+                Map<String, Object> td = new LinkedHashMap<>();
+                td.put("tradeId",     rec.getTradeId());
+                td.put("entryPrice",  rec.getEntryPrice());
+                td.put("stopLoss",    rec.getStopLoss());
+                td.put("takeProfit",  rec.getTakeProfit());
+                td.put("entryRegime", rec.getEntryRegime());
+                td.put("exitPrice",   rec.getExitPrice());
+                td.put("exitReason",  rec.getExitReason());
+                td.put("exitRegime",  rec.getExitRegime());
+                td.put("barsHeld",    rec.getBarsHeld());
+
+                if (rec.getPnl() != null) {
+                    td.put("pnl",    rec.getPnl().setScale(2, RoundingMode.HALF_UP));
+                    td.put("result", rec.getPnl().compareTo(BigDecimal.ZERO) > 0 ? "WIN" : "LOSS");
+                } else {
+                    td.put("pnl",    null);
+                    td.put("result", "OPEN");
+                }
+
+                // ATR% at entry (approximated from SL distance / entry price × 0.5,
+                // since SL = entry × (1 - 2×atrPct), so atrPct = (entry-SL)/(entry×2))
+                if (rec.getEntryPrice() != null && rec.getStopLoss() != null
+                        && rec.getEntryPrice().compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal slDistance = rec.getEntryPrice().subtract(rec.getStopLoss());
+                    BigDecimal atrPct = slDistance
+                            .divide(rec.getEntryPrice().multiply(BigDecimal.valueOf(2.0)),
+                                    4, RoundingMode.HALF_UP)
+                            .multiply(BigDecimal.valueOf(100));
+                    td.put("impliedAtrPct", atrPct.toPlainString() + "%");
+                }
+
+                // Root-cause categorisation for losses
+                if (rec.getExitPrice() != null && rec.getPnl() != null
+                        && rec.getPnl().compareTo(BigDecimal.ZERO) <= 0) {
+                    String rootCause;
+                    if ("SL".equals(rec.getExitReason()) && rec.getBarsHeld() <= 2) {
+                        rootCause = "QUICK_REVERSAL";
+                        quickReversals++;
+                    } else if ("SL".equals(rec.getExitReason()) && rec.getBarsHeld() <= 10) {
+                        rootCause = "SLOW_GRIND_DOWN";
+                        slowGrindDowns++;
+                    } else if ("FORCE_CLOSE".equals(rec.getExitReason())) {
+                        rootCause = "TIMEOUT";
+                        timeouts++;
+                    } else {
+                        rootCause = "MARGINAL_EXIT";
+                        marginalExits++;
+                    }
+                    td.put("rootCause", rootCause);
+                } else if ("TP".equals(rec.getExitReason())) {
+                    td.put("rootCause", "TP_HIT");
+                    tpHits++;
+                }
+
+                tradeDetails.add(td);
+            }
+
+            // ── Symbol-level audit summary ────────────────────────────────────
+            Map<String, Object> lossCauses = new LinkedHashMap<>();
+            lossCauses.put("QUICK_REVERSAL (SL ≤2 bars)",   quickReversals);
+            lossCauses.put("SLOW_GRIND_DOWN (SL 3-10 bars)", slowGrindDowns);
+            lossCauses.put("TIMEOUT (force-close)",          timeouts);
+            lossCauses.put("MARGINAL_EXIT (other SL)",       marginalExits);
+            lossCauses.put("TP_HIT (winners)",               tpHits);
+
+            symbolAudit.put("totalTrades",   result.getTotalTrades());
+            symbolAudit.put("winRate",       result.getWinRate());
+            symbolAudit.put("profitFactor",  result.getProfitFactor());
+            symbolAudit.put("maxDrawdown",   result.getMaxDrawdown());
+            symbolAudit.put("totalPnL",      result.getTotalPnL());
+            symbolAudit.put("lossCauses",    lossCauses);
+            symbolAudit.put("trades",        tradeDetails);
+
+            String primaryCause = "UNKNOWN";
+            int maxCount = 0;
+            if (quickReversals > maxCount)  { maxCount = quickReversals;  primaryCause = "QUICK_REVERSAL — entry right before reversal; tighten entry confirmation"; }
+            if (slowGrindDowns > maxCount)  { maxCount = slowGrindDowns;  primaryCause = "SLOW_GRIND_DOWN — trend resumes against position; consider wider SL"; }
+            if (timeouts > maxCount)        { maxCount = timeouts;         primaryCause = "TIMEOUT — position held too long without direction; check TP distance"; }
+            symbolAudit.put("primaryLossCause", primaryCause);
+
+            auditResults.add(symbolAudit);
+
+            System.out.println("[Audit] " + symbol
+                    + " trades=" + result.getTotalTrades()
+                    + " winRate=" + result.getWinRate()
+                    + " quickRev=" + quickReversals
+                    + " slowGrind=" + slowGrindDowns
+                    + " timeouts=" + timeouts);
+        }
+
+        response.put("results", auditResults);
+        return response;
     }
 
 }

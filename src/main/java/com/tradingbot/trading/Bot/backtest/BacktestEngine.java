@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li><b>1-bar delayed fills</b>: signal at bar[i] fills at bar[i+1]</li>
  *   <li><b>Entry confirmation</b>: fill only if bar[i+1] close ≥ signal-bar close (filters false breakouts)</li>
+ *   <li><b>Regime filter</b>: entries skipped during HIGH_VOLATILITY or CRASH regimes</li>
  *   <li><b>ATR-based stop loss</b>: 2.0×ATR(14) below entry — wider than market noise to avoid false stop-outs</li>
  *   <li><b>ATR-based take profit</b>: 3.5×ATR(14) above entry — reward-to-risk ratio of 1.75</li>
  *   <li><b>Trailing stop</b>: once price moves 1×ATR above entry, stop trails at currentPrice − 2×ATR</li>
@@ -160,21 +161,29 @@ public class BacktestEngine {
             // ── 2. Delayed fill: enter at bar[i+1] after signal at bar[i] ──────
             if (pendingSignal && positionManager.getOpenPosition(symbol).isEmpty()) {
 
-                // Entry confirmation: cancel only if the next bar closes more than 2% below
-                // the signal-bar close (indicating a genuine reversal, not noise).
-                // The strategy already confirmed the breakout using bar close; we allow small
-                // intra-day pullbacks which are common on volatile stocks like NVDA/TSLA.
-                boolean cancelEntry = false;
-                if (signalBarClose != null && rawPrice.compareTo(BigDecimal.ZERO) > 0) {
-                    BigDecimal threshold = signalBarClose.multiply(BigDecimal.valueOf(0.98))
-                            .setScale(4, RoundingMode.HALF_UP);
-                    if (rawPrice.setScale(4, RoundingMode.HALF_UP).compareTo(threshold) < 0) {
-                        System.out.println("[BacktestEngine] ENTRY CANCELLED (reversal >2%) "
+                // Regime guard: skip entries during HIGH_VOLATILITY or CRASH regimes.
+                // These are noisy, mean-reverting conditions where breakout signals
+                // have very low follow-through rates and produce the majority of losses.
+                boolean regimeForbidsEntry =
+                        regime == MarketRegime.HIGH_VOLATILITY || regime == MarketRegime.CRASH;
+
+                // Entry confirmation: require the next bar close >= signal-bar close.
+                // A close below the signal-bar close means the breakout has already
+                // reversed; entering would be chasing a failed breakout.
+                boolean cancelEntry = regimeForbidsEntry;
+                if (!cancelEntry && signalBarClose != null && rawPrice.compareTo(BigDecimal.ZERO) > 0) {
+                    if (rawPrice.setScale(4, RoundingMode.HALF_UP)
+                            .compareTo(signalBarClose) < 0) {
+                        System.out.println("[BacktestEngine] ENTRY CANCELLED (close below signal bar) "
                                 + symbol + " bar=" + i
                                 + " close=" + rawPrice.setScale(4, RoundingMode.HALF_UP)
-                                + " < 98% of signalClose=" + threshold);
+                                + " < signalClose=" + signalBarClose);
                         cancelEntry = true;
                     }
+                }
+                if (regimeForbidsEntry) {
+                    System.out.println("[BacktestEngine] ENTRY SKIPPED (regime=" + regime + ") "
+                            + symbol + " bar=" + i);
                 }
 
                 if (!cancelEntry) {
