@@ -276,15 +276,6 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
             requestInProgress = false;
 
             System.out.println("=== All symbols processed. Waiting before next cycle ===");
-
-            new Thread(() -> {
-                try {
-                    Thread.sleep(60000);
-                    requestHistoricalBars();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }).start();
         }
     }
 
@@ -350,6 +341,11 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
 
         client.placeOrder(orderId, contract, order);
 
+        // 🔐 Optimistically mark the position as open in broker state so subsequent
+        // evaluation cycles don't submit a second BUY order before the fill
+        // confirmation arrives via execDetails().
+        brokerStateService.updatePosition(decision.getSymbol(), decision.getQuantity());
+
         System.out.println("BUY order sent for " + decision.getSymbol());
     }
 
@@ -391,6 +387,13 @@ public class IBKRPaperBrokerAdapter extends BaseEWrapper {
             TradeDecision decision = pendingOrders.get(orderId);
 
             if (decision == null) return;
+
+            // 🔐 Idempotency: execDetails can fire multiple times for the same
+            // order (e.g. partial fills).  Only open the position once.
+            if (positionManager.getOpenPosition(symbol).isPresent()) {
+                pendingOrders.remove(orderId);
+                return;
+            }
 
             Position position = new Position(
                     symbol,

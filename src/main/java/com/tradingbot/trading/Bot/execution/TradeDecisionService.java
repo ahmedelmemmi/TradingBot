@@ -2,7 +2,6 @@ package com.tradingbot.trading.Bot.execution;
 
 import com.tradingbot.trading.Bot.broker.BrokerStateService;
 import com.tradingbot.trading.Bot.domain.Candle;
-import com.tradingbot.trading.Bot.domain.Position;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.risk.RiskEngine;
 import com.tradingbot.trading.Bot.strategy.RsiStrategyService;
@@ -73,14 +72,6 @@ public class TradeDecisionService {
         if (quantity.compareTo(BigDecimal.ZERO) <= 0) {
             return TradeDecision.noTrade("Position size too small");
         }
-
-        Position position = new Position(
-                symbol,
-                entryPrice,
-                quantity,
-                stopLoss,
-                takeProfit
-        );
 
         return TradeDecision.buy(symbol, entryPrice, quantity, stopLoss, takeProfit);
     }
