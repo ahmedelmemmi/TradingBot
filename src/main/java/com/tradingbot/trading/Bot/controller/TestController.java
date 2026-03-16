@@ -10,6 +10,7 @@ import com.tradingbot.trading.Bot.backtest.PortfolioBacktestEngine;
 import com.tradingbot.trading.Bot.backtest.PortfolioBacktestResult;
 import com.tradingbot.trading.Bot.broker.BrokerStateService;
 import com.tradingbot.trading.Bot.broker.IBKRPaperBrokerAdapter;
+import com.tradingbot.trading.Bot.broker.IBKRPaperTradingSessionService;
 import com.tradingbot.trading.Bot.domain.Candle;
 import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
@@ -31,6 +32,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
@@ -63,6 +65,7 @@ public class TestController {
     private final BacktestValidationService backtestValidationService;
     private final YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider;
     private final RsiCalculator rsiCalculator;
+    private final IBKRPaperTradingSessionService ibkrPaperTradingSessionService;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
@@ -78,7 +81,8 @@ public class TestController {
                           PortfolioBacktestEngine portfolioBacktestEngine,
                           BacktestValidationService backtestValidationService,
                           YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider,
-                          RsiCalculator rsiCalculator) {
+                          RsiCalculator rsiCalculator,
+                          IBKRPaperTradingSessionService ibkrPaperTradingSessionService) {
 
         this.marketDataService              = marketDataService;
         this.rsiStrategyService             = rsiStrategyService;
@@ -95,6 +99,7 @@ public class TestController {
         this.backtestValidationService      = backtestValidationService;
         this.yahooFinanceMarketDataProvider = yahooFinanceMarketDataProvider;
         this.rsiCalculator                  = rsiCalculator;
+        this.ibkrPaperTradingSessionService = ibkrPaperTradingSessionService;
     }
 
     /*
@@ -2962,4 +2967,30 @@ public class TestController {
         return response;
     }
 
+    /*
+     -------------------------------------------------------
+     PAPER TRADE — IBKR PAPER ACCOUNT ($10,000)
+     -------------------------------------------------------
+     Runs RobustTrendBreakoutStrategy on real Yahoo Finance
+     data (last 6 months) with $10,000 paper capital and
+     returns a full IBKR-style order execution log, per-
+     symbol metrics, signal analysis, and integration gap
+     report.
+     -------------------------------------------------------
+     */
+    @Operation(
+        summary = "IBKR paper trading session — $10,000 capital",
+        description = "Runs RobustTrendBreakoutStrategy on the last 6 months of real " +
+                      "Yahoo Finance daily data (SPY, QQQ, AAPL, MSFT, NVDA, TSLA) " +
+                      "with $10,000 starting capital. Returns an IBKR-style order " +
+                      "execution log (orderId, action, fillPrice, commission, execTime, " +
+                      "realisedPnl), per-symbol metrics, signal analysis, and a list of " +
+                      "integration gaps to close before enabling live IBKR AUTO_TRADING.")
+    @GetMapping("/paper-trade/ibkr")
+    public Map<String, Object> paperTradeIbkr(
+            @RequestParam(required = false) List<String> symbols) {
+        return ibkrPaperTradingSessionService.runSession(symbols);
+    }
+
 }
+
