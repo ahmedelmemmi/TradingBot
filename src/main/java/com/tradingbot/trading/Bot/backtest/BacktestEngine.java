@@ -64,15 +64,35 @@ public class BacktestEngine {
      * @param strategy trading strategy to evaluate
      * @return backtest result with metrics and trade log
      */
+    /**
+     * Runs the strategy with the default starting capital of $10,000.
+     */
     public BacktestResult runStrategy(String symbol,
                                       List<Candle> candles,
                                       Strategy strategy) {
+        return runStrategy(symbol, candles, strategy, STARTING_CAPITAL);
+    }
+
+    /**
+     * Runs the strategy against the provided candle list with a custom starting
+     * capital and returns a full {@link BacktestResult}.
+     *
+     * @param symbol         ticker symbol
+     * @param candles        full historical candle list
+     * @param strategy       trading strategy to evaluate
+     * @param startingCapital custom starting capital (e.g. $100 for small-account test)
+     * @return backtest result with metrics and trade log
+     */
+    public BacktestResult runStrategy(String symbol,
+                                      List<Candle> candles,
+                                      Strategy strategy,
+                                      BigDecimal startingCapital) {
 
         // Reset regime-persistence state so previous runs do not contaminate this one.
         regimeService.reset();
 
-        BigDecimal capital   = STARTING_CAPITAL;
-        BigDecimal peakEquity = STARTING_CAPITAL;
+        BigDecimal capital   = startingCapital;
+        BigDecimal peakEquity = startingCapital;
         BigDecimal maxDrawdown = BigDecimal.ZERO;
 
         positionManager.getOpenPositions().clear();
@@ -302,7 +322,7 @@ public class BacktestEngine {
         // ── 5. Force close any remaining positions at end of data ─────────────
         capital = closeRemainingPositions(symbol, candles, capital, tradeLog);
 
-        return calculateResults(capital, maxDrawdown, equityCurve, tradeLog);
+        return calculateResults(startingCapital, capital, maxDrawdown, equityCurve, tradeLog);
     }
 
     private BigDecimal closeRemainingPositions(String symbol,
@@ -346,7 +366,8 @@ public class BacktestEngine {
         return capital;
     }
 
-    private BacktestResult calculateResults(BigDecimal capital,
+    private BacktestResult calculateResults(BigDecimal startingCapital,
+                                            BigDecimal capital,
                                             BigDecimal maxDrawdown,
                                             List<BigDecimal> equityCurve,
                                             List<TradeRecord> tradeLog) {
@@ -418,7 +439,7 @@ public class BacktestEngine {
         }
 
         return new BacktestResult(
-                STARTING_CAPITAL,
+                startingCapital,
                 endingCapital,
                 totalTrades,
                 winningTrades,
