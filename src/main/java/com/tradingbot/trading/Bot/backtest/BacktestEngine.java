@@ -56,16 +56,12 @@ public class BacktestEngine {
     }
 
     /**
-     * Runs the strategy against the provided candle list and returns a full
-     * {@link BacktestResult} including trade records and equity curve.
+     * Runs the strategy with the default starting capital of $10,000.
      *
      * @param symbol   ticker symbol
      * @param candles  full historical candle list
      * @param strategy trading strategy to evaluate
      * @return backtest result with metrics and trade log
-     */
-    /**
-     * Runs the strategy with the default starting capital of $10,000.
      */
     public BacktestResult runStrategy(String symbol,
                                       List<Candle> candles,

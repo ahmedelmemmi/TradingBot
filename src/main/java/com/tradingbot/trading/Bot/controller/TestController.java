@@ -2847,7 +2847,7 @@ public class TestController {
                 capitalConstraintNote =
                         "⚠️ CAPITAL CONSTRAINT: Fewer trades taken with $100 — some signals " +
                         "were skipped because the position cost exceeded available capital. " +
-                        "High-priced stocks (AAPL, MSFT) require fractional shares or higher capital.";
+                        "High-priced stocks require fractional shares or higher capital.";
             } else if (sameTradeCount) {
                 capitalConstraintNote =
                         "✅ CAPITAL SUFFICIENT: Same number of signals triggered. " +
