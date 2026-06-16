@@ -9,7 +9,7 @@ import java.util.List;
  * Abstraction layer for market data sources.
  *
  * <p>Implementations can be swapped to support mock data (for backtesting),
- * historical real data (e.g. Yahoo Finance), or live data (e.g. IBKR)
+ * historical real data (e.g. Yahoo Finance), or live data (e.g. Pocket Option)
  * without changing any strategy or backtest engine code.</p>
  */
 public interface MarketDataProvider {
