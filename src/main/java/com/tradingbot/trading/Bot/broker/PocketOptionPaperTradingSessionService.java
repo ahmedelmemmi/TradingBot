@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Because this service runs inside a build/CI environment without a live
  * Pocket Option market gateway available in CI, it sources market data from Yahoo Finance and drives
  * execution through the same {@link BacktestEngine} / {@link RobustTrendBreakoutStrategy}
- * pipeline used by the paper-trading simulation. The
+ * pipeline used for paper-trading validation. The
  * resulting {@link PaperOrderExecution} list is structurally identical to the
  * records returned by the Pocket Option paper-trading session output.</p>
  *
@@ -47,7 +47,7 @@ public class PocketOptionPaperTradingSessionService {
     private final RobustTrendBreakoutStrategy     strategy;
     private final YahooFinanceMarketDataProvider  marketDataProvider;
     
-    /** Monotonically-increasing simulated order ID counter. */
+    /** Monotonically increasing simulated order ID counter. */
     private final AtomicInteger orderIdCounter = new AtomicInteger(1000);
 
     public PocketOptionPaperTradingSessionService(BacktestEngine backtestEngine,
@@ -60,7 +60,7 @@ public class PocketOptionPaperTradingSessionService {
 
     /**
      * Runs a full paper-trading session and returns a structured session map
-     * suitable for JSON serialisation.
+     * suitable for JSON serialization.
      *
      * @param symbols list of ticker symbols to trade (defaults to {@link #DEFAULT_SYMBOLS}
      *                when {@code null} or empty)
