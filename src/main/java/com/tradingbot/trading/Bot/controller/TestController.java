@@ -257,27 +257,6 @@ public class TestController {
 
     /*
      -------------------------------------------------------
-     PAPER ORDER TEST
-     -------------------------------------------------------
-     */
-    @GetMapping("/test-order")
-    public String testOrder() {
-
-        TradeDecision decision = TradeDecision.buy(
-                "AAPL",
-                BigDecimal.valueOf(180),
-                BigDecimal.ONE,
-                BigDecimal.valueOf(175),
-                BigDecimal.valueOf(190)
-        );
-
-        brokerAdapter.submitOrder(decision);
-
-        return "Paper order submitted";
-    }
-
-    /*
-     -------------------------------------------------------
      BROKER STATE
      -------------------------------------------------------
      */
