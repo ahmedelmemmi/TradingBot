@@ -4,12 +4,10 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * Represents a single IBKR paper-account order execution record.
+ * Represents a single paper-account order execution record.
  *
- * <p>Fields mirror the fields surfaced by the Interactive Brokers
- * {@code execDetails} callback ({@code Execution} object) so that
- * the in-process paper-trading simulation produces a log that is
- * structurally identical to what a live IBKR connection would emit.</p>
+ * <p>Fields mirror standard order execution data so that the in-process
+ * paper-trading simulation produces a consistent broker-style execution log.</p>
  */
 public class PaperOrderExecution {
 

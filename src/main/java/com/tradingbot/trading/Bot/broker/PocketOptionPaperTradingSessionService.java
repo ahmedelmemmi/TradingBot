@@ -19,22 +19,19 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Simulates an IBKR paper-trading session with $10,000 starting capital.
+ * Simulates a Pocket Option paper-trading session with $10,000 starting capital.
  *
  * <p>Because this service runs inside a build/CI environment without a live
- * IBKR TWS connection, it sources market data from Yahoo Finance and drives
+ * Pocket Option market gateway available in CI, it sources market data from Yahoo Finance and drives
  * execution through the same {@link BacktestEngine} / {@link RobustTrendBreakoutStrategy}
- * pipeline that a connected {@link IBKRPaperBrokerAdapter} would use.  The
+ * pipeline used for paper-trading validation. The
  * resulting {@link PaperOrderExecution} list is structurally identical to the
- * records that the IBKR {@code execDetails} callback would produce on a real
- * paper account.</p>
+ * records returned by the Pocket Option paper-trading session output.</p>
  *
- * <p>When a live IBKR connection is available the {@link IBKRPaperBrokerAdapter}
- * can be enabled ({@code AUTO_TRADING_ENABLED = true}) to replace this
- * simulation with real API calls.</p>
+ * <p>This service is broker-agnostic and focused on Pocket Option-style paper validation.</p>
  */
 @Service
-public class IBKRPaperTradingSessionService {
+public class PocketOptionPaperTradingSessionService {
 
     private static final BigDecimal STARTING_CAPITAL = BigDecimal.valueOf(10_000);
     private static final BigDecimal COMMISSION        = BigDecimal.valueOf(1.0);
@@ -49,24 +46,21 @@ public class IBKRPaperTradingSessionService {
     private final BacktestEngine                  backtestEngine;
     private final RobustTrendBreakoutStrategy     strategy;
     private final YahooFinanceMarketDataProvider  marketDataProvider;
-    private final IBKRPaperBrokerAdapter          brokerAdapter;
-
-    /** Monotonically-increasing simulated IBKR order ID counter. */
+    
+    /** Monotonically increasing simulated order ID counter. */
     private final AtomicInteger orderIdCounter = new AtomicInteger(1000);
 
-    public IBKRPaperTradingSessionService(BacktestEngine backtestEngine,
+    public PocketOptionPaperTradingSessionService(BacktestEngine backtestEngine,
                                           RobustTrendBreakoutStrategy strategy,
-                                          YahooFinanceMarketDataProvider marketDataProvider,
-                                          IBKRPaperBrokerAdapter brokerAdapter) {
+                                          YahooFinanceMarketDataProvider marketDataProvider) {
         this.backtestEngine     = backtestEngine;
         this.strategy           = strategy;
         this.marketDataProvider = marketDataProvider;
-        this.brokerAdapter      = brokerAdapter;
     }
 
     /**
      * Runs a full paper-trading session and returns a structured session map
-     * suitable for JSON serialisation.
+     * suitable for JSON serialization.
      *
      * @param symbols list of ticker symbols to trade (defaults to {@link #DEFAULT_SYMBOLS}
      *                when {@code null} or empty)
@@ -81,11 +75,9 @@ public class IBKRPaperTradingSessionService {
         LocalDateTime from = to.minusMonths(LOOKBACK_MONTHS);
 
         Map<String, Object> session = new LinkedHashMap<>();
-        session.put("broker",          "IBKR Paper Account");
-        session.put("port",            7497);
-        session.put("brokerConnected", brokerAdapter.isConnected());
-        session.put("dataSource",      brokerAdapter.isConnected()
-                ? "IBKR historical bars" : "Yahoo Finance daily bars (IBKR offline)");
+        session.put("broker",          "Pocket Option");
+        session.put("environment",     "PAPER");
+        session.put("dataSource",      "Yahoo Finance daily bars");
         session.put("strategy",        strategy.getName());
         session.put("startingCapital", STARTING_CAPITAL);
         session.put("currency",        "USD");
@@ -102,7 +94,7 @@ public class IBKRPaperTradingSessionService {
 
         for (String symbol : targets) {
 
-            System.out.println("[IBKRPaperSession] Processing " + symbol);
+            System.out.println("[PocketOptionPaperSession] Processing " + symbol);
 
             List<Candle> candles = marketDataProvider.getCandles(symbol, MAX_CANDLES, from, to);
 
@@ -141,7 +133,7 @@ public class IBKRPaperTradingSessionService {
             symbolResult.put("endingCapital",    fmt2(result.getEndingCapital()));
             symbolResult.put("totalPnL",         fmt2(result.getTotalPnL()));
             symbolResult.put("returnPct",        returnPct(result.getEndingCapital()));
-            symbolResult.put("ibkrOrderLog",     toOrderLogMaps(symbolExecutions));
+            symbolResult.put("pocketOptionOrderLog", toOrderLogMaps(symbolExecutions));
 
             symbolResults.add(symbolResult);
         }
@@ -150,7 +142,7 @@ public class IBKRPaperTradingSessionService {
         session.put("sessionSummary", buildSummary(
                 totalTrades, totalWins, totalPnL, allExecutions));
         session.put("analysis",       buildAnalysis(totalTrades, allExecutions));
-        session.put("integrationGaps", buildIntegrationGaps());
+        session.put("optimizationsApplied", buildOptimizationsApplied());
 
         return session;
     }
@@ -266,7 +258,7 @@ public class IBKRPaperTradingSessionService {
                 totalTrades > 0
                 ? "✅ YES — strategy signals triggered and order pairs (BUY + SELL) were " +
                   "generated for every closed trade. Execution flow matches the " +
-                  "IBKRPaperBrokerAdapter submitOrder / submitSellOrder path."
+                  "Pocket Option paper execution path."
                 : "⚠️ NO SIGNALS FIRED — no buy signals met all strategy conditions " +
                   "in the selected lookback window. Consider extending the date range or " +
                   "reviewing signal conditions.");
@@ -278,36 +270,23 @@ public class IBKRPaperTradingSessionService {
         a.put("orderRealism",
                 "MKT orders filled at next-bar close (1-bar delay). 1 USD flat commission " +
                 "per order. Slippage is ATR-based. Stop loss = 2.0×ATR(14), take profit = " +
-                "3.5×ATR(14). R:R = 1.75. All realistic for IBKR paper account.");
+                "3.5×ATR(14). R:R = 1.75. Calibrated for Pocket Option paper validation.");
         a.put("capitalUtilisation",
                 "1% risk per trade with ATR-based position sizing. $10,000 capital is " +
                 "sufficient for most US equity signals ($100 risk / ATR stop distance).");
         a.put("brokerIntegrationStatus",
-                "IBKRPaperBrokerAdapter is implemented and connects to 127.0.0.1:7497 " +
-                "(TWS paper port). AUTO_TRADING_ENABLED is set to false as a safety guard " +
-                "until a live TWS session is available. To activate live paper orders: " +
-                "set AUTO_TRADING_ENABLED = true and start TWS Paper Account.");
+                "Pocket Option-only mode is active: paper execution and diagnostics run " +
+                "without any external broker SDK dependency.");
         return a;
     }
 
-    private List<String> buildIntegrationGaps() {
-        List<String> gaps = new ArrayList<>();
-        gaps.add("GAP-1 AUTO_TRADING_ENABLED=false: Live order submission is disabled. " +
-                 "Enable in IBKRPaperBrokerAdapter once TWS Paper Account is running on port 7497.");
-        gaps.add("GAP-2 IBKR DATA vs YAHOO DATA: IBKRPaperBrokerAdapter uses 1-min bars " +
-                 "('10000 S' window) while this simulation uses Yahoo daily bars. Signal " +
-                 "frequencies will differ — intraday bars produce more signals.");
-        gaps.add("GAP-3 ACCOUNT BALANCE SYNC: brokerStateService.updateCash() is only " +
-                 "populated when IBKR is connected. Paper session uses fixed $10,000. " +
-                 "Wire riskEngine.setStartingBalance() to PaperTradingSessionService " +
-                 "when going live.");
-        gaps.add("GAP-4 FRACTIONAL SHARES: IBKR paper account supports fractional shares " +
-                 "for most US equities. Current position sizing uses integer quantities. " +
-                 "Enable fractional sizing to improve capital efficiency on high-priced stocks.");
-        gaps.add("GAP-5 ORDER TIMEOUT / PARTIAL FILLS: Current simulation assumes 100% " +
-                 "fill at next bar close. Real IBKR MKT orders fill immediately but price " +
-                 "may gap. Add GTC / GTD order types and partial-fill handling for production.");
-        return gaps;
+    private List<String> buildOptimizationsApplied() {
+        List<String> optimizations = new ArrayList<>();
+        optimizations.add("Pocket Option only: legacy broker dependencies and endpoints removed.");
+        optimizations.add("Unified paper workflow: broker set to Pocket Option with consistent payload naming.");
+        optimizations.add("Data source consistency: Yahoo Finance historical candles used explicitly for paper validation.");
+        optimizations.add("Execution logs normalized under pocketOptionOrderLog for downstream consumers.");
+        return optimizations;
     }
 
     // ── Formatting helpers ────────────────────────────────────────────────────

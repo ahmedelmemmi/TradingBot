@@ -5,7 +5,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class PaperBrokerAdapter {
-    // This simulates a real broker, like IBKR paper account
+    // This simulates a real paper broker account
     public boolean submitOrder(TradeDecision decision) {
 
         if (!decision.isExecute()) return false;
@@ -17,7 +17,7 @@ public class PaperBrokerAdapter {
         System.out.println("SL: " + decision.getStopLoss());
         System.out.println("TP: " + decision.getTakeProfit());
 
-        // In the future, this is where IBKR API call goes
+        // In the future, this is where Pocket Option API call goes
         // e.g., client.placeOrder(...)
 
         // Simulate immediate paper fill

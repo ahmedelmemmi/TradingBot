@@ -95,17 +95,6 @@
 			<optional>true</optional>
 		</dependency>
 
-		<!-- IBKR API (install locally via: mvn install:install-file -Dfile=TwsApi.jar
-		     -DgroupId=com.ib.client -DartifactId=ibapi -Dversion=10.37.02 -Dpackaging=jar)
-		     Marked optional so the build succeeds without the jar on CI. -->
-		<!--
-		<dependency>
-			<groupId>com.ib.client</groupId>
-			<artifactId>ibapi</artifactId>
-			<version>10.37.02</version>
-		</dependency>
-		-->
-
 		<!-- Protobuf -->
 		<dependency>
 			<groupId>com.google.protobuf</groupId>

@@ -9,8 +9,7 @@ import com.tradingbot.trading.Bot.backtest.HybridBacktestResult;
 import com.tradingbot.trading.Bot.backtest.PortfolioBacktestEngine;
 import com.tradingbot.trading.Bot.backtest.PortfolioBacktestResult;
 import com.tradingbot.trading.Bot.broker.BrokerStateService;
-import com.tradingbot.trading.Bot.broker.IBKRPaperBrokerAdapter;
-import com.tradingbot.trading.Bot.broker.IBKRPaperTradingSessionService;
+import com.tradingbot.trading.Bot.broker.PocketOptionPaperTradingSessionService;
 import com.tradingbot.trading.Bot.domain.Candle;
 import com.tradingbot.trading.Bot.execution.TradeDecision;
 import com.tradingbot.trading.Bot.execution.TradeDecisionService;
@@ -58,14 +57,13 @@ public class TestController {
     private final TradeDecisionService tradeDecisionService;
     private final PositionManager positionManager;
     private final BacktestEngine backtestEngine;
-    private final IBKRPaperBrokerAdapter brokerAdapter;
     private final BrokerStateService brokerStateService;
     private final MarketRegimeService marketRegimeService;
     private final PortfolioBacktestEngine portfolioBacktestEngine;
     private final BacktestValidationService backtestValidationService;
     private final YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider;
     private final RsiCalculator rsiCalculator;
-    private final IBKRPaperTradingSessionService ibkrPaperTradingSessionService;
+    private final PocketOptionPaperTradingSessionService pocketOptionPaperTradingSessionService;
 
     public TestController(MockMarketDataService marketDataService,
                           RsiStrategyService rsiStrategyService,
@@ -75,14 +73,13 @@ public class TestController {
                           TradeDecisionService tradeDecisionService,
                           PositionManager positionManager,
                           BacktestEngine backtestEngine,
-                          IBKRPaperBrokerAdapter brokerAdapter,
                           BrokerStateService brokerStateService,
                           MarketRegimeService marketRegimeService,
                           PortfolioBacktestEngine portfolioBacktestEngine,
                           BacktestValidationService backtestValidationService,
                           YahooFinanceMarketDataProvider yahooFinanceMarketDataProvider,
                           RsiCalculator rsiCalculator,
-                          IBKRPaperTradingSessionService ibkrPaperTradingSessionService) {
+                          PocketOptionPaperTradingSessionService pocketOptionPaperTradingSessionService) {
 
         this.marketDataService              = marketDataService;
         this.rsiStrategyService             = rsiStrategyService;
@@ -92,14 +89,13 @@ public class TestController {
         this.tradeDecisionService           = tradeDecisionService;
         this.positionManager                = positionManager;
         this.backtestEngine                 = backtestEngine;
-        this.brokerAdapter                  = brokerAdapter;
         this.brokerStateService             = brokerStateService;
         this.marketRegimeService            = marketRegimeService;
         this.portfolioBacktestEngine        = portfolioBacktestEngine;
         this.backtestValidationService      = backtestValidationService;
         this.yahooFinanceMarketDataProvider = yahooFinanceMarketDataProvider;
         this.rsiCalculator                  = rsiCalculator;
-        this.ibkrPaperTradingSessionService = ibkrPaperTradingSessionService;
+        this.pocketOptionPaperTradingSessionService = pocketOptionPaperTradingSessionService;
     }
 
     /*
@@ -261,31 +257,10 @@ public class TestController {
 
     /*
      -------------------------------------------------------
-     PAPER ORDER TEST
-     -------------------------------------------------------
-     */
-    @GetMapping("/test-order")
-    public String testOrder() {
-
-        TradeDecision decision = TradeDecision.buy(
-                "AAPL",
-                BigDecimal.valueOf(180),
-                BigDecimal.ONE,
-                BigDecimal.valueOf(175),
-                BigDecimal.valueOf(190)
-        );
-
-        brokerAdapter.submitOrder(decision);
-
-        return "Paper order submitted";
-    }
-
-    /*
-     -------------------------------------------------------
      BROKER STATE
      -------------------------------------------------------
      */
-    @Operation(summary = "Broker state", description = "Returns current IBKR paper broker positions.")
+    @Operation(summary = "Broker state", description = "Returns current Pocket Option paper broker positions.")
     @GetMapping("/broker-state")
     public Object brokerState() {
         return brokerStateService.getPositions();
@@ -2969,28 +2944,27 @@ public class TestController {
 
     /*
      -------------------------------------------------------
-     PAPER TRADE — IBKR PAPER ACCOUNT ($10,000)
+     PAPER TRADE — POCKET OPTION PAPER ACCOUNT ($10,000)
      -------------------------------------------------------
      Runs RobustTrendBreakoutStrategy on real Yahoo Finance
      data (last 6 months) with $10,000 paper capital and
-     returns a full IBKR-style order execution log, per-
-     symbol metrics, signal analysis, and integration gap
-     report.
+     returns a full Pocket Option-style order execution log, per-
+     symbol metrics, signal analysis, and optimization
+     summary.
      -------------------------------------------------------
      */
     @Operation(
-        summary = "IBKR paper trading session — $10,000 capital",
+        summary = "Pocket Option paper trading session — $10,000 capital",
         description = "Runs RobustTrendBreakoutStrategy on the last 6 months of real " +
                       "Yahoo Finance daily data (SPY, QQQ, AAPL, MSFT, NVDA, TSLA) " +
-                      "with $10,000 starting capital. Returns an IBKR-style order " +
+                      "with $10,000 starting capital. Returns a Pocket Option-style order " +
                       "execution log (orderId, action, fillPrice, commission, execTime, " +
                       "realisedPnl), per-symbol metrics, signal analysis, and a list of " +
-                      "integration gaps to close before enabling live IBKR AUTO_TRADING.")
-    @GetMapping("/paper-trade/ibkr")
-    public Map<String, Object> paperTradeIbkr(
+                      "optimization summary for Pocket Option-only operation.")
+    @GetMapping("/paper-trade/pocket-option")
+    public Map<String, Object> paperTradePocketOption(
             @RequestParam(required = false) List<String> symbols) {
-        return ibkrPaperTradingSessionService.runSession(symbols);
+        return pocketOptionPaperTradingSessionService.runSession(symbols);
     }
 
 }
-

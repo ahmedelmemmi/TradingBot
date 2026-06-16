@@ -35,7 +35,7 @@ info:
     ## Endpoints
     | Endpoint | Purpose |
     |---|---|
-    | GET /broker-state | Current IBKR paper positions |
+    | GET /broker-state | Current Pocket Option paper positions |
     | GET /backtest/robust | Sanity-check on mock STRONG_UPTREND data |
     | GET /backtest/real/multi | Primary real-data validation (13 symbols) |
     | GET /backtest/real/multi/diagnostics | Per-symbol filter funnel analysis |
@@ -50,7 +50,7 @@ paths:
   /broker-state:
     get:
       summary: Broker state
-      description: Returns current IBKR paper broker positions.
+      description: Returns current Pocket Option paper broker positions.
       operationId: brokerState
       responses:
         "200":
