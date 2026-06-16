@@ -6,7 +6,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "trades")
+@Table(name = "trades_legacy")
 public class TradeEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

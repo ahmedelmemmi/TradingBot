@@ -1,0 +1,85 @@
+{
+  "title": "Trading Bot Dashboard",
+  "uid": "tradingbot-main",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Daily PnL",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "risk_daily_pnl",
+          "legendFormat": "Daily P/L"
+        }
+      ],
+      "options": { "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "id": 2,
+      "title": "Win Rate (last 24h)",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(trades_won_total[24h]) / (rate(trades_won_total[24h]) + rate(trades_lost_total[24h]))",
+          "legendFormat": "Win Rate"
+        }
+      ],
+      "options": { "unit": "percentunit" }
+    },
+    {
+      "id": 3,
+      "title": "Consecutive Losses",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "risk_consecutive_losses", "legendFormat": "Streak" }
+      ],
+      "options": { "colorMode": "background" }
+    },
+    {
+      "id": 4,
+      "title": "ML Prediction Latency",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(ml_prediction_duration_seconds_bucket[5m]))",
+          "legendFormat": "p95 latency"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Trades Placed vs Won",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "rate(trades_placed_total[5m])", "legendFormat": "Placed" },
+        { "expr": "rate(trades_won_total[5m])",   "legendFormat": "Won"    },
+        { "expr": "rate(trades_lost_total[5m])",  "legendFormat": "Lost"   }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Signals Approved vs Blocked",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "rate(signals_approved_total[5m])", "legendFormat": "Approved" },
+        { "expr": "rate(signals_blocked_total[5m])",  "legendFormat": "Blocked"  }
+      ]
+    }
+  ]
+}
