@@ -32,5 +32,19 @@ build/
 ### VS Code ###
 .vscode/
 
-### H2 Database ###
+### H2 Database (legacy) ###
 data/
+
+### Environment / secrets ###
+.env
+
+### ML models ###
+ml-service/models/
+*.joblib
+
+### Python ###
+ml-service/__pycache__/
+ml-service/.pytest_cache/
+ml-service/*.egg-info/
+ml-service/.venv/
+
