@@ -3,6 +3,7 @@ Model registry – holds the currently active model in memory.
 """
 
 import os
+import re
 import joblib
 import logging
 from datetime import datetime
@@ -11,12 +12,16 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Only allow alphanumeric characters, underscores, and hyphens in version strings
+# to prevent path traversal attacks.
+_VERSION_RE = re.compile(r'^[A-Za-z0-9_\-]+$')
+
 
 class ModelRegistry:
     """In-memory registry for the active trading model."""
 
     def __init__(self, models_dir: str):
-        self.models_dir    = models_dir
+        self.models_dir    = os.path.realpath(models_dir)
         self.model         = None
         self.active_version: Optional[str] = None
         self.loaded_at:      Optional[datetime] = None
@@ -32,7 +37,14 @@ class ModelRegistry:
         self.load_version(latest)
 
     def load_version(self, version: str):
-        model_path = os.path.join(self.models_dir, f"{version}.joblib")
+        if not _VERSION_RE.match(version):
+            raise ValueError(f"Invalid model version format: {version!r}")
+        # Resolve the absolute path and confirm it stays within models_dir
+        model_path = os.path.realpath(
+            os.path.join(self.models_dir, f"{version}.joblib")
+        )
+        if not model_path.startswith(self.models_dir + os.sep):
+            raise ValueError(f"Path traversal detected for version: {version!r}")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
         bundle = joblib.load(model_path)

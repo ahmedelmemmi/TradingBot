@@ -54,6 +54,9 @@ public class TradingOrchestrator {
     @Value("${trading.balance.initial:1000.00}")
     private BigDecimal initialBalance;
 
+    @Value("${trading.rules.expiry-seconds:60}")
+    private int expirySeconds;
+
     public TradingOrchestrator(MarketDataService marketDataService,
                                SignalFusionEngine fusionEngine,
                                BinaryTradeExecutor executor,
@@ -115,7 +118,7 @@ public class TradingOrchestrator {
         BigDecimal currentPrice = latestCandle.getClose();
 
         List<BinaryTradeEntity> expired = tradeRepo.findExpiredTrades(
-                Instant.now().minusSeconds(60));  // trades older than 60s
+                Instant.now().minusSeconds(expirySeconds));
 
         for (BinaryTradeEntity trade : expired) {
             try {
