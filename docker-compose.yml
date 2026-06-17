@@ -97,9 +97,12 @@ services:
       dockerfile: Dockerfile
     container_name: tradingbot-app
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/tradingbot
-      DB_USER: tradingbot
-      DB_PASSWORD: ${DB_PASSWORD:-tradingbot_dev}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tradingbot
+      SPRING_DATASOURCE_USERNAME: tradingbot
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-tradingbot_dev}
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/tradingbot
+      SPRING_FLYWAY_USER: tradingbot
+      SPRING_FLYWAY_PASSWORD: ${DB_PASSWORD:-tradingbot_dev}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_dev}
