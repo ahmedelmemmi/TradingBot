@@ -2,7 +2,6 @@ package com.tradingbot.trading.Bot.backtest;
 
 import com.tradingbot.trading.Bot.domain.Candle;
 import com.tradingbot.trading.Bot.market.MarketRegimeService;
-import com.tradingbot.trading.Bot.persistence.TradeService;
 import com.tradingbot.trading.Bot.position.PositionManager;
 import com.tradingbot.trading.Bot.strategy.RsiCalculator;
 import com.tradingbot.trading.Bot.strategy.TradingSignal;
@@ -15,9 +14,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.mock;
 
 /**
  * Tests that the equity curve and max-drawdown calculation in {@link BacktestEngine}
@@ -40,10 +36,7 @@ class BacktestEngineEquityTest {
 
     @BeforeEach
     void setUp() {
-        TradeService tradeService = mock(TradeService.class);
-        doNothing().when(tradeService).recordEntry(any(), any(), any());
-        doNothing().when(tradeService).recordExit(any(), any(), any());
-        PositionManager positionManager = new PositionManager(tradeService);
+        PositionManager positionManager = new PositionManager();
         SlippageService slippageService = new SlippageService();
         MarketRegimeService regimeService = new MarketRegimeService();
         engine = new BacktestEngine(positionManager, slippageService, regimeService);
